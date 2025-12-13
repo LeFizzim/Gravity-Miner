@@ -106,7 +106,6 @@ class GameEngine {
       
       const oldHoleLeft = this.holeLeft;
       const oldHoleWidth = this.holeWidth;
-      const oldCanvasWidth = this.canvasWidth; // Store old width
 
       // Update Dimensions
       this.canvasWidth = width;
