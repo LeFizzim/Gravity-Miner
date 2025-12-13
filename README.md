@@ -1,73 +1,21 @@
-# React + TypeScript + Vite
+# Gravity Miner
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+**Gravity Miner** is an infinite, physics-based idle game where you watch a powerful drilling ball descend into the depths of the earth.
 
-Currently, two official plugins are available:
+## How It Works
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+The game operates on a simple but satisfying premise: a ball is dropped into a hole filled with layers of hexagonal blocks. Using a custom physics engine, the ball bounces off the walls and blocks, dealing damage with every collision.
 
-## React Compiler
+*   **Destruction**: Blocks have health points. When the ball hits them enough times, they break.
+*   **Progression**: Breaking blocks earns you money and clears the path deeper underground.
+*   **Infinite Depth**: The world is procedurally generated as you fall. There is no bottom, only deeper and tougher layers to uncover.
+*   **Idle Gameplay**: Once started, the ball does the work for you. Sit back and watch the mining happen.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## Technology Stack
 
-## Expanding the ESLint configuration
+This project was built using modern web technologies to ensure high performance and smooth visuals:
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
-
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
-
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
-
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
+*   **React**: Used for the application framework and managing the game's user interface overlay.
+*   **TypeScript**: Provides type safety and robust code structure for the game logic.
+*   **Vite**: A fast build tool that powers the development environment and optimizes the final application.
+*   **HTML5 Canvas**: The core of the game engine. All rendering, from the textured dirt walls to the bouncing ball and hexagonal grid, is drawn directly to the canvas for maximum performance and visual control.
