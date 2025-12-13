@@ -3,6 +3,7 @@ import GameEngine from '../game/GameEngine';
 
 const GameCanvas: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const resizeTimeoutRef = useRef<number | null>(null);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -20,39 +21,82 @@ const GameCanvas: React.FC = () => {
     const handleResize = () => {
       canvas.width = window.innerWidth;
       canvas.height = window.innerHeight;
-      engine.canvasWidth = canvas.width;
-      engine.canvasHeight = canvas.height;
+      
+      engine.isResizing = true;
+      engine.resize(canvas.width, canvas.height);
+      
+      if (resizeTimeoutRef.current) {
+          clearTimeout(resizeTimeoutRef.current);
+      }
+      resizeTimeoutRef.current = window.setTimeout(() => {
+          engine.isResizing = false;
+      }, 100);
     };
 
-    const handleMouseDown = (e: MouseEvent) => {
+    const handleInput = (type: string, e: MouseEvent | TouchEvent) => {
         const rect = canvas.getBoundingClientRect();
-        const x = e.clientX - rect.left;
-        const y = e.clientY - rect.top;
-        engine.handleClick(x, y);
+        let clientX, clientY;
+
+        if (e instanceof MouseEvent) {
+            clientX = e.clientX;
+            clientY = e.clientY;
+        } else {
+            clientX = e.touches[0]?.clientX || e.changedTouches[0]?.clientX;
+            clientY = e.touches[0]?.clientY || e.changedTouches[0]?.clientY;
+        }
+
+        const x = clientX - rect.left;
+        const y = clientY - rect.top;
+        engine.handleInput(type, x, y);
+    };
+
+    const onMouseDown = (e: MouseEvent) => handleInput('mousedown', e);
+    const onMouseUp = (e: MouseEvent) => handleInput('mouseup', e);
+    
+    // Basic touch support
+    const onTouchStart = (e: TouchEvent) => handleInput('mousedown', e);
+    const onTouchEnd = (e: TouchEvent) => handleInput('mouseup', e);
+
+    const onKeyDown = (e: KeyboardEvent) => {
+        if (e.key === 'Escape') {
+            engine.togglePause();
+        }
     };
 
     window.addEventListener('resize', handleResize);
-    canvas.addEventListener('mousedown', handleMouseDown);
+    window.addEventListener('keydown', onKeyDown);
+    canvas.addEventListener('mousedown', onMouseDown);
+    canvas.addEventListener('mouseup', onMouseUp);
+    canvas.addEventListener('touchstart', onTouchStart);
+    canvas.addEventListener('touchend', onTouchEnd);
 
     let animationFrameId: number;
+    let lastTime = performance.now();
 
-    const gameLoop = () => {
+    const gameLoop = (time: number) => {
+      const dt = Math.min(time - lastTime, 50); // Cap dt to 50ms to prevent huge jumps
+      lastTime = time;
+
       // Clear canvas
       context.clearRect(0, 0, canvas.width, canvas.height);
 
       // Update and Draw Engine
-      engine.update();
+      engine.update(dt);
       engine.draw(context);
 
       animationFrameId = requestAnimationFrame(gameLoop);
     };
 
-    gameLoop(); 
+    animationFrameId = requestAnimationFrame(gameLoop); 
 
     return () => {
       cancelAnimationFrame(animationFrameId);
       window.removeEventListener('resize', handleResize);
-      canvas.removeEventListener('mousedown', handleMouseDown);
+      window.removeEventListener('keydown', onKeyDown);
+      canvas.removeEventListener('mousedown', onMouseDown);
+      canvas.removeEventListener('mouseup', onMouseUp);
+      canvas.removeEventListener('touchstart', onTouchStart);
+      canvas.removeEventListener('touchend', onTouchEnd);
     };
   }, []);
 

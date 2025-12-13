@@ -6,8 +6,10 @@ class Block {
   maxHp: number;
   value: number;
   color: string;
+  row: number;
+  col: number;
 
-  constructor(x: number, y: number, radius: number, hp: number, value: number, color: string) {
+  constructor(x: number, y: number, radius: number, hp: number, value: number, color: string, row: number, col: number) {
     this.x = x;
     this.y = y;
     this.radius = radius;
@@ -15,6 +17,8 @@ class Block {
     this.maxHp = hp;
     this.value = value;
     this.color = color;
+    this.row = row;
+    this.col = col;
   }
 
   draw(context: CanvasRenderingContext2D, offsetY: number = 0, minX: number = -Infinity, maxX: number = Infinity) {

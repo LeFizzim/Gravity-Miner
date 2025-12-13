@@ -8,7 +8,9 @@ class GameEngine {
   canvasHeight: number;
   money: number = 0;
   
-  gameState: 'MENU' | 'PLAYING' = 'MENU';
+  gameState: 'MENU' | 'PLAYING' | 'PAUSED' = 'MENU';
+  isMouseDown: boolean = false; // Track mouse state
+  isResizing: boolean = false; // Track resize state
 
   // Camera/Scroll offset
   offsetY: number = -300; 
@@ -34,23 +36,24 @@ class GameEngine {
 
     this.blocks = [];
     
+    // Calc constants for generation based on Hole Width
+    const numColumns = 10;
+    const dx = this.holeWidth / (numColumns - 1);
+    const radius = dx / Math.sqrt(3); // Base radius of block hex
+    this.rowHeight = radius * 1.5;
+
     // Initialize Ball high above centered
     this.ball = new Ball(
       width / 2, 
       -200,   
-      12,  
+      radius * 0.3,  // Dynamic ball radius (reduced by 50%)
       '#ff4444', 
       (Math.random() - 0.5) * 4, 
       0, 
-      0.3, 
+      radius * 0.02, // Dynamic Gravity 
       0.8  
     );
 
-    // Calc constants for generation based on Hole Width
-    const numColumns = 10;
-    const dx = this.holeWidth / (numColumns - 1);
-    const radius = dx / Math.sqrt(3);
-    this.rowHeight = radius * 1.5;
 
     // Create Pattern
     this.initDirtPattern();
@@ -90,9 +93,86 @@ class GameEngine {
   }
   
   updateGeometry() {
-    this.holeWidth = this.canvasWidth / 3;
-    this.holeLeft = this.canvasWidth / 3;
+    this.holeWidth = this.canvasWidth / 2; // 50% width
+    this.holeLeft = (this.canvasWidth - this.holeWidth) / 2; // Centered
     this.holeRight = this.holeLeft + this.holeWidth;
+  }
+
+  resize(width: number, height: number) {
+      // Store old metrics
+      const oldRowHeight = this.rowHeight;
+      const oldRadius = oldRowHeight / 1.5;
+      const oldStartY = 200 + oldRadius + 20;
+      
+      const oldHoleLeft = this.holeLeft;
+      const oldHoleWidth = this.holeWidth;
+      const oldCanvasWidth = this.canvasWidth; // Store old width
+
+      // Update Dimensions
+      this.canvasWidth = width;
+      this.canvasHeight = height;
+      this.updateGeometry();
+
+      // Recalculate new constants
+      const numColumns = 10;
+      const dx = this.holeWidth / (numColumns - 1);
+      const radius = dx / Math.sqrt(3);
+      this.rowHeight = radius * 1.5;
+      
+      const newStartY = 200 + radius + 20;
+
+      // Update Ball radius
+      this.ball.radius = radius * 0.3;
+
+      // Precise Remapping
+      if (oldRowHeight > 1) {
+          // Vertical
+          const ballRowIndex = (this.ball.y - oldStartY) / oldRowHeight;
+          this.ball.y = newStartY + ballRowIndex * this.rowHeight;
+
+          // Horizontal (Ball)
+          if (oldHoleWidth > 0) {
+              const ballRelX = this.ball.x - oldHoleLeft;
+              const ratioX = this.holeWidth / oldHoleWidth;
+              this.ball.x = this.holeLeft + ballRelX * ratioX;
+          }
+
+          // Scale Velocity based on Radius change
+          // Instead of simple ratio scaling which can drift, we Normalize energy relative to block size.
+          if (oldRadius > 0) {
+              const currentSpeed = Math.sqrt(this.ball.dx * this.ball.dx + this.ball.dy * this.ball.dy);
+              const normalizedSpeed = currentSpeed / oldRadius;
+              
+              // New target speed
+              let newSpeed = normalizedSpeed * radius;
+              
+              // Clamp speed to prevent explosions (Max speed = 1 block radius per frame)
+              const maxSafeSpeed = radius * 1.0;
+              if (newSpeed > maxSafeSpeed) newSpeed = maxSafeSpeed;
+
+              // Preserve direction
+              if (currentSpeed > 0.001) {
+                  this.ball.dx = (this.ball.dx / currentSpeed) * newSpeed;
+                  this.ball.dy = (this.ball.dy / currentSpeed) * newSpeed;
+              }
+          }
+          
+          this.ball.gravity = radius * 0.02; // Increased gravity for better feel
+
+          // Reset camera to follow ball immediately to prevent culling issues
+          this.offsetY = this.ball.y - this.canvasHeight / 3;
+      }
+
+      // Update existing blocks
+      this.blocks.forEach(block => {
+          block.radius = radius - 1; 
+          
+          const xOffset = (block.row % 2 === 0) ? 0 : -dx / 2;
+          const cx = block.col * dx + xOffset;
+          
+          block.x = cx + this.holeLeft;
+          block.y = newStartY + block.row * this.rowHeight;
+      });
   }
 
   generateRows(startRow: number, count: number) {
@@ -101,7 +181,8 @@ class GameEngine {
     const dx = this.holeWidth / (numColumns - 1);
     const radius = dx / Math.sqrt(3);
     const dy = this.rowHeight;
-    const startY = 250; // Started lower (below grass line at 200)
+    // Ensure blocks start below the ground (200) + radius buffer
+    const startY = 200 + radius + 20; 
 
     for (let r = startRow; r < startRow + count; r++) {
         for (let c = 0; c < numColumns; c++) {
@@ -127,20 +208,32 @@ class GameEngine {
                 radius - 1, 
                 1 + Math.floor(r * 0.2), 
                 10 + Math.floor(r * 0.5), 
-                color
+                color,
+                r, // Row
+                c  // Col
             ));
         }
     }
     this.maxRowGenerated = startRow + count;
   }
 
-  update() {
-    if (this.gameState === 'MENU') {
+  update(dt: number) {
+    if (this.gameState === 'MENU' || this.gameState === 'PAUSED' || this.isResizing) {
         return;
     }
 
-    this.ball.update({ width: this.canvasWidth, height: this.canvasHeight } as HTMLCanvasElement);
+    const timeScale = dt / 16.667; // Normalize to 60fps (16.667ms per frame)
+
+    this.ball.update({ width: this.canvasWidth, height: this.canvasHeight } as HTMLCanvasElement, timeScale);
     
+    // Clamp velocity to prevent physics instability
+    // Limit speed to roughly 80% of a block radius per frame
+    const maxVelocity = (this.rowHeight / 1.5) * 0.8; 
+    if (this.ball.dy > maxVelocity) this.ball.dy = maxVelocity;
+    if (this.ball.dy < -maxVelocity) this.ball.dy = -maxVelocity;
+    if (this.ball.dx > maxVelocity) this.ball.dx = maxVelocity;
+    if (this.ball.dx < -maxVelocity) this.ball.dx = -maxVelocity;
+
     // Hole Wall Collisions
     if (this.ball.x - this.ball.radius < this.holeLeft) {
         this.ball.x = this.holeLeft + this.ball.radius;
@@ -205,6 +298,8 @@ class GameEngine {
     
     if (this.gameState === 'MENU') {
         this.drawTitleScreen(context);
+    } else if (this.gameState === 'PAUSED') {
+        this.drawPauseScreen(context);
     } else {
         // Draw HUD (Top Right)
         const hudW = 200;
@@ -212,18 +307,42 @@ class GameEngine {
         const hudX = this.canvasWidth - hudW - 20;
         const hudY = 20;
 
-        // Rounded Rect Background
+        // Rounded Rect Background for Stats
         context.fillStyle = 'rgba(50, 50, 50, 0.8)';
         context.beginPath();
         context.roundRect(hudX, hudY, hudW, hudH, 10);
         context.fill();
 
-        // Text
+        // Stats Text
         context.fillStyle = 'white';
-        context.font = '20px Arial';
+        context.font = '20px "Fredoka One", cursive';
         context.textAlign = 'left';
         context.fillText(`Depth: ${Math.max(0, Math.floor((this.ball.y - 200) / 100))}m`, hudX + 20, hudY + 35);
         context.fillText(`Money: $${this.money}`, hudX + 20, hudY + 65);
+
+        // Draw Pause Button (Top Left)
+        const pauseBtnSize = 60;
+        const pauseBtnX = 20;
+        const pauseBtnY = 20;
+
+        // Rounded Rect Background for Pause
+        context.fillStyle = 'rgba(50, 50, 50, 0.8)';
+        context.beginPath();
+        context.roundRect(pauseBtnX, pauseBtnY, pauseBtnSize, pauseBtnSize, 10);
+        context.fill();
+
+        // Pause Icon (Two vertical bars)
+        context.fillStyle = 'white';
+        const barW = 8;
+        const barH = 24;
+        const barGap = 10;
+        const centerX = pauseBtnX + pauseBtnSize / 2;
+        const centerY = pauseBtnY + pauseBtnSize / 2;
+        
+        context.beginPath();
+        context.roundRect(centerX - barGap/2 - barW, centerY - barH/2, barW, barH, 2);
+        context.roundRect(centerX + barGap/2, centerY - barH/2, barW, barH, 2);
+        context.fill();
     }
   }
 
@@ -306,53 +425,258 @@ class GameEngine {
 
     // Box dimensions
     const boxW = 500;
-    const boxH = 200;
+    const boxH = 250; // Increased height
     const boxX = this.canvasWidth / 2 - boxW / 2;
-    const boxY = this.canvasHeight / 2 - boxH / 2 - 100; // Moved 100px higher
+    const boxY = this.canvasHeight / 2 - boxH / 2 - 180;
 
-    // Rounded Grey Box
+    // Rounded Grey Box with Border
+    const borderColor = '#1A1A1A'; // Darker grey for border
+    const borderWidth = 2;
     context.fillStyle = 'rgba(50, 50, 50, 0.9)';
+    context.strokeStyle = borderColor;
+    context.lineWidth = borderWidth;
+    
     context.beginPath();
     context.roundRect(boxX, boxY, boxW, boxH, 15);
     context.fill();
+    context.stroke(); // Draw border
 
-    // Title
+    // Layout Calculations for Centering
+    const title1 = "LeFizzim's";
+    const title2 = "Gravity Miner";
+    const titleLineHeight = 50; 
+    const btnHeight = 55; // 50 button + 5 shadow
+    const gap = 25; // Space between title block and button
+    
+    // Calculate total height of content
+    const totalContentHeight = titleLineHeight * 2 + gap + btnHeight; 
+    
+    const centerY = boxY + boxH / 2;
+    // Visual correction: Shift content UP to reduce top margin
+    const startY = centerY - totalContentHeight / 2 - 15; 
+    
+    const title1Y = startY + titleLineHeight / 2 + 10; 
+    const title2Y = startY + titleLineHeight + titleLineHeight / 2 + 10; 
+    const btnY = startY + titleLineHeight * 2 + gap;
+
+    // Title Text (Split and Shadowed)
     context.fillStyle = 'white';
-    context.font = '36px Arial';
     context.textAlign = 'center';
-    context.fillText("LeFizzim's Gravity Miner", this.canvasWidth / 2, boxY + 60);
+    
+    // LeFizzim's (Fredoka One, Italic, Lighter)
+    context.font = 'italic 24px "Fredoka One", cursive';
+    context.fillStyle = '#dddddd';
+    context.fillText(title1, this.canvasWidth / 2, title1Y);
+
+    // Gravity Miner (Fredoka One, Big, Shadowed)
+    context.shadowColor = 'rgba(0, 0, 0, 0.8)';
+    context.shadowBlur = 8; 
+    context.shadowOffsetX = 3; 
+    context.shadowOffsetY = 3; 
+    
+    context.font = '48px "Fredoka One", cursive';
+    context.strokeStyle = borderColor; 
+    context.lineWidth = borderWidth;   
+    context.strokeText(title2, this.canvasWidth / 2, title2Y); // Draw outline first
+    context.fillStyle = 'white'; // Set fill style to white
+    context.fillText(title2, this.canvasWidth / 2, title2Y); // Then draw the white fill
+
+    context.shadowBlur = 0; // Reset shadow
+    context.shadowOffsetX = 0;
+    context.shadowOffsetY = 0;
 
     // Start Button
     const btnW = 200;
     const btnH = 50;
     const btnX = this.canvasWidth / 2 - btnW / 2;
-    const btnY = boxY + 100; // Reduced gap
+    
+    const btnOffset = this.isMouseDown ? 3 : 0; // Shift button down if pressed
 
+    // 3D Shadow (Darker Green)
+    context.fillStyle = '#2e7d32'; 
+    context.beginPath();
+    context.roundRect(btnX, btnY + 5, btnW, btnH, 5); // Shadow always there
+    context.fill();
+
+    // Main Button Face (Lighter Green)
     context.fillStyle = '#4caf50';
     context.beginPath();
-    context.roundRect(btnX, btnY, btnW, btnH, 5);
+    context.roundRect(btnX, btnY + btnOffset, btnW, btnH, 5); // Apply offset if pressed
     context.fill();
     
     context.fillStyle = 'white';
-    context.font = '24px Arial';
-    // Centered text in button
-    context.fillText("START", this.canvasWidth / 2, btnY + 33);
+    context.font = '30px "Fredoka One", cursive';
+    context.shadowColor = 'rgba(0,0,0,0.5)';
+    context.shadowBlur = 2;
+    context.fillText("START", this.canvasWidth / 2, btnY + 35 + btnOffset); // Apply offset to text
+    context.shadowBlur = 0;
   }
 
-  handleClick(x: number, y: number) {
+  drawPauseScreen(context: CanvasRenderingContext2D) {
+    context.fillStyle = 'rgba(0, 0, 0, 0.5)'; // Darken background less than main menu
+    context.fillRect(0, 0, this.canvasWidth, this.canvasHeight);
+
+    // Box dimensions (Same as Title Screen)
+    const boxW = 500;
+    const boxH = 250; 
+    const boxX = this.canvasWidth / 2 - boxW / 2;
+    const boxY = this.canvasHeight / 2 - boxH / 2 - 100; // Keep slightly higher position
+
+    // Rounded Grey Box
+    const borderColor = '#1A1A1A'; 
+    const borderWidth = 2;
+    context.fillStyle = 'rgba(50, 50, 50, 0.9)';
+    context.strokeStyle = borderColor;
+    context.lineWidth = borderWidth;
+    
+    context.beginPath();
+    context.roundRect(boxX, boxY, boxW, boxH, 15);
+    context.fill();
+    context.stroke();
+
+    // Text "PAUSED"
+    const titleText = "PAUSED";
+    const titleLineHeight = 60; // Single line title here
+    const btnHeight = 55; 
+    const gap = 30; 
+    
+    // Content Height: Title + Gap + Button
+    const totalContentHeight = titleLineHeight + gap + btnHeight; 
+    
+    const centerY = boxY + boxH / 2;
+    const startY = centerY - totalContentHeight / 2; // Center it vertically
+    
+    const titleY = startY + titleLineHeight / 2 + 10;
+    const btnY = startY + titleLineHeight + gap;
+
+    context.textAlign = 'center';
+    context.shadowColor = 'rgba(0, 0, 0, 0.8)';
+    context.shadowBlur = 8; 
+    context.shadowOffsetX = 3; 
+    context.shadowOffsetY = 3; 
+    
+    context.font = '48px "Fredoka One", cursive';
+    context.strokeStyle = borderColor; 
+    context.lineWidth = borderWidth;   
+    context.strokeText(titleText, this.canvasWidth / 2, titleY); 
+    context.fillStyle = 'white'; 
+    context.fillText(titleText, this.canvasWidth / 2, titleY); 
+
+    context.shadowBlur = 0; 
+    context.shadowOffsetX = 0;
+    context.shadowOffsetY = 0;
+
+    // Resume Button
+    const btnW = 200;
+    const btnH = 50;
+    const btnX = this.canvasWidth / 2 - btnW / 2;
+    
+    const btnOffset = this.isMouseDown ? 3 : 0; 
+
+    // Shadow
+    context.fillStyle = '#2e7d32'; 
+    context.beginPath();
+    context.roundRect(btnX, btnY + 5, btnW, btnH, 5); 
+    context.fill();
+
+    // Face
+    context.fillStyle = '#4caf50';
+    context.beginPath();
+    context.roundRect(btnX, btnY + btnOffset, btnW, btnH, 5); 
+    context.fill();
+    
+    context.fillStyle = 'white';
+    context.font = '30px "Fredoka One", cursive';
+    context.shadowColor = 'rgba(0,0,0,0.5)';
+    context.shadowBlur = 2;
+    context.fillText("RESUME", this.canvasWidth / 2, btnY + 35 + btnOffset); 
+    context.shadowBlur = 0;
+  }
+
+  togglePause() {
+      if (this.gameState === 'PLAYING') {
+          this.gameState = 'PAUSED';
+      } else if (this.gameState === 'PAUSED') {
+          this.gameState = 'PLAYING';
+          this.isMouseDown = false; // Reset mouse state on resume
+      }
+  }
+
+  handleInput(type: string, x: number, y: number) {
     if (this.gameState === 'MENU') {
         const btnW = 200;
         const btnH = 50;
-        const boxH = 200;
-        // Match the drawing logic:
-        const boxY = this.canvasHeight / 2 - boxH / 2 - 100;
-        const btnY = boxY + 100;
+        const boxH = 250;
+        const boxY = this.canvasHeight / 2 - boxH / 2 - 180;
+        
+        const titleLineHeight = 50;
+        const btnHeight = 55;
+        const gap = 25;
+        const totalContentHeight = titleLineHeight * 2 + gap + btnHeight;
+        const centerY = boxY + boxH / 2;
+        const startY = centerY - totalContentHeight / 2 - 15;
+        const btnY = startY + titleLineHeight * 2 + gap;
+
         const btnX = this.canvasWidth / 2 - btnW / 2;
 
-        if (x >= btnX && x <= btnX + btnW && y >= btnY && y <= btnY + btnH) {
-            this.gameState = 'PLAYING';
-            this.ball.dx = (Math.random() - 0.5) * 4;
-            this.ball.dy = 5;
+        if (x >= btnX && x <= btnX + btnW && y >= btnY && y <= btnY + btnH + 5) {
+            if (type === 'mousedown') {
+                this.isMouseDown = true;
+            } else if (type === 'mouseup' && this.isMouseDown) {
+                this.gameState = 'PLAYING';
+                
+                // Scale initial velocity by radius to keep gameplay consistent across sizes
+                const radius = this.rowHeight / 1.5; 
+                this.ball.dx = (Math.random() - 0.5) * (radius * 0.15); // Scaled horizontal speed
+                this.ball.dy = radius * 0.4; // Stronger vertical speed (0.4)
+                
+                this.isMouseDown = false;
+            }
+        } else {
+            if (type === 'mouseup') this.isMouseDown = false;
+        }
+    } else if (this.gameState === 'PAUSED') {
+        // Pause Menu Button Logic
+        const btnW = 200;
+        const btnH = 50;
+        const boxH = 250;
+        // Same BoxY as Menu? 
+        // In drawPauseScreen: const boxY = this.canvasHeight / 2 - boxH / 2 - 100;
+        const boxY = this.canvasHeight / 2 - boxH / 2 - 100;
+
+        const titleLineHeight = 60;
+        const btnHeight = 55; 
+        const gap = 30; 
+        const totalContentHeight = titleLineHeight + gap + btnHeight; 
+        const centerY = boxY + boxH / 2;
+        const startY = centerY - totalContentHeight / 2;
+        const btnY = startY + titleLineHeight + gap;
+        const btnX = this.canvasWidth / 2 - btnW / 2;
+
+        if (x >= btnX && x <= btnX + btnW && y >= btnY && y <= btnY + btnH + 5) {
+            if (type === 'mousedown') {
+                this.isMouseDown = true;
+            } else if (type === 'mouseup' && this.isMouseDown) {
+                this.togglePause();
+            }
+        } else {
+            if (type === 'mouseup') this.isMouseDown = false;
+        }
+    } else if (this.gameState === 'PLAYING') {
+        // Check for Pause Button click
+        const pauseBtnSize = 60;
+        const pauseBtnX = 20;
+        const pauseBtnY = 20;
+
+        if (x >= pauseBtnX && x <= pauseBtnX + pauseBtnSize && y >= pauseBtnY && y <= pauseBtnY + pauseBtnSize) {
+            if (type === 'mousedown') {
+                this.isMouseDown = true;
+            } else if (type === 'mouseup' && this.isMouseDown) {
+                this.togglePause();
+                this.isMouseDown = false;
+            }
+        } else {
+             if (type === 'mouseup') this.isMouseDown = false;
         }
     }
   }
@@ -397,10 +721,13 @@ class GameEngine {
         ball.y += ny * overlap;
 
         const dot = ball.dx * nx + ball.dy * ny;
+        // Only bounce if moving towards the wall (dot < 0)
         if (dot < 0) {
             ball.dx = (ball.dx - 2 * dot * nx) * ball.elasticity;
             ball.dy = (ball.dy - 2 * dot * ny) * ball.elasticity;
-            ball.dx += (Math.random() - 0.5) * 0.5;
+            
+            // Add slight jitter scaled by block size
+            ball.dx += (Math.random() - 0.5) * (block.radius * 0.02);
         }
         return true;
     }

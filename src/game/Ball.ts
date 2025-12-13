@@ -19,11 +19,13 @@ class Ball {
     this.elasticity = elasticity;
   }
 
-  update(canvas: HTMLCanvasElement) {
-    // Apply gravity
-    this.dy += this.gravity;
-    this.y += this.dy;
-    this.x += this.dx;
+  update(canvas: HTMLCanvasElement, timeScale: number = 1) {
+    // Apply gravity scaled by time
+    this.dy += this.gravity * timeScale;
+    
+    // Apply velocity scaled by time
+    this.y += this.dy * timeScale;
+    this.x += this.dx * timeScale;
 
     // Boundary collision detection and response (walls)
     if (this.x + this.radius > canvas.width || this.x - this.radius < 0) {
