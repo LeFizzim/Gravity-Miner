@@ -46,7 +46,14 @@ npm install
 ```
 
 ### Development Server
-Starts the local development server using Vite with hot module replacement (HMR). **IMPORTANT:** You must leave this shell running to keep the server active. Do not background it or terminate the process until testing is complete.
+Starts the local development server using Vite with hot module replacement (HMR). 
+
+**CRITICAL INSTRUCTION FOR AI AGENT:** 
+- Simply writing `npm run dev` in the chat DOES NOT start the server. 
+- You MUST use the `run_shell_command` tool to execute `npm run dev` in the foreground.
+- You must leave this shell running to keep the server active. 
+- **Restart Required:** Because the environment terminates the shell between user turns, the server MUST be restarted using the shell tool every time the user wants to test after a new prompt.
+
 ```bash
 npm run dev
 ```
