@@ -178,12 +178,13 @@ class GameEngine {
                   this.ball.dy = (this.ball.dy / currentSpeed) * newSpeed;
               }
           }
-          
-          this.ball.gravity = radius * 0.02; 
 
           // Reset camera to follow ball immediately
           this.offsetY = this.ball.y - this.canvasHeight / 3;
       }
+      
+      // Always update gravity based on new radius
+      this.ball.gravity = radius * 0.02; 
 
       // Update existing blocks
       this.blocks.forEach(block => {
