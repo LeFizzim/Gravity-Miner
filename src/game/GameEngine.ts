@@ -1,5 +1,6 @@
 import Ball from './Ball';
 import Block from './Block';
+import SoundManager from './SoundManager';
 
 class GameEngine {
   ball: Ball;
@@ -40,6 +41,14 @@ class GameEngine {
   autoSaveTimer: number = 0;
   readonly AUTO_SAVE_INTERVAL: number = 5 * 60 * 1000; // 5 Minutes
   
+  // Settings
+  settings = {
+      showHp: true,
+      volume: 0.5,
+      sfxBlocks: true,
+      sfxBounce: true
+  };
+
   constructor(width: number, height: number) {
     this.canvasWidth = width;
     this.canvasHeight = height;
@@ -119,6 +128,7 @@ class GameEngine {
   saveGame() {
       const data = {
           money: this.money,
+          settings: this.settings,
           offsetY: this.offsetY,
           maxRowGenerated: this.maxRowGenerated,
           rowHeight: this.rowHeight,
@@ -172,6 +182,14 @@ class GameEngine {
           const data = JSON.parse(json);
           
           this.money = data.money;
+          if (data.settings) {
+              this.settings = { ...this.settings, ...data.settings };
+          }
+          // Sync SoundManager
+          SoundManager.volume = this.settings.volume;
+          SoundManager.muteBlocks = !this.settings.sfxBlocks;
+          SoundManager.muteBounce = !this.settings.sfxBounce;
+
           this.offsetY = data.offsetY;
           this.maxRowGenerated = data.maxRowGenerated;
           this.rowHeight = data.rowHeight; // Temporarily set to saved value for resize logic
@@ -410,10 +428,12 @@ class GameEngine {
     // Hole Wall Collisions
     if (this.ball.x - this.ball.radius < this.holeLeft) {
         this.ball.x = this.holeLeft + this.ball.radius;
+        if (Math.abs(this.ball.dx) > 1) SoundManager.playBounce(Math.abs(this.ball.dx) / 5);
         this.ball.dx *= -this.ball.elasticity;
     }
     if (this.ball.x + this.ball.radius > this.holeRight) {
         this.ball.x = this.holeRight - this.ball.radius;
+        if (Math.abs(this.ball.dx) > 1) SoundManager.playBounce(Math.abs(this.ball.dx) / 5);
         this.ball.dx *= -this.ball.elasticity;
     }
 
@@ -440,6 +460,7 @@ class GameEngine {
         if (destroyed) {
           this.blocks.splice(i, 1);
           this.money += block.value;
+          SoundManager.playPop();
         }
       }
     }
@@ -461,7 +482,7 @@ class GameEngine {
     this.blocks.forEach(block => {
         if (block.y - this.offsetY > this.canvasHeight + 500 || block.y - this.offsetY < -500) return;
         // Pass bounds for text hiding
-        block.draw(context, 0, this.holeLeft, this.holeRight);
+        block.draw(context, 0, this.holeLeft, this.holeRight, this.settings.showHp);
     });
     this.ball.draw(context);
     
@@ -805,7 +826,7 @@ class GameEngine {
 
   getPauseMenuLayout() {
       const scale = Math.min(this.canvasWidth, this.canvasHeight) / 1000;
-      const margin = 30 * scale;
+      const margin = 50 * scale; // Increased margin
       const btnW = 200 * scale;
       const btnHeight = 55 * scale;
       const gap = 25 * scale;
@@ -815,9 +836,12 @@ class GameEngine {
       
       let boxH = 0;
       if (this.menuState === 'MAIN') {
-          boxH = margin + titleLineHeight + gap + (btnHeight * 3) + (gap * 2) + margin;
+          // Extra space at bottom for notification (approx 30 * scale)
+          boxH = margin + titleLineHeight + gap + (btnHeight * 3) + (gap * 2) + (30 * scale) + margin;
       } else {
-          boxH = margin + titleLineHeight + gap + (100 * scale) + gap + btnHeight + margin;
+          // Settings Height: Title + Volume + 3 Toggles + Back + Spacing
+          // Recalculated for larger margins: ~485+ needed. Setting to 520 for safety.
+          boxH = 520 * scale; 
       }
       
       const boxW = btnW + (margin * 2);
@@ -863,7 +887,7 @@ class GameEngine {
   }
 
   drawPauseMain(context: CanvasRenderingContext2D, layout: any) {
-    const { btnX, btnW, btnHeight, resumeBtnY, settingsBtnY, saveBtnY, titleY, scale, boxY, boxH, margin } = layout;
+    const { btnX, btnW, btnHeight, resumeBtnY, settingsBtnY, saveBtnY, titleY, scale, boxY, boxH } = layout;
     const titleText = "PAUSED";
 
     // Title
@@ -905,8 +929,10 @@ class GameEngine {
         context.font = `${30 * scale}px "Fredoka One", cursive`;
         context.shadowColor = 'rgba(0,0,0,0.5)';
         context.shadowBlur = 2 * scale;
+        context.textBaseline = 'middle';
         context.fillText(text, this.canvasWidth / 2, y + (btnHeight / 2) + offset); 
         context.shadowBlur = 0;
+        context.textBaseline = 'alphabetic';
     };
 
     drawButton("RESUME", resumeBtnY, 'resume', '#4caf50', '#2e7d32');
@@ -922,8 +948,16 @@ class GameEngine {
         context.fillStyle = '#4caf50'; 
         context.font = `${20 * scale}px "Fredoka One", cursive`;
         context.textAlign = 'center';
-        // Positioned inside bottom margin
-        context.fillText(this.notificationText, this.canvasWidth / 2, boxY + boxH - (margin / 2));
+        context.textBaseline = 'middle';
+        
+        // Positioned below the Save button (centered in the remaining space)
+        // remaining space starts at saveBtnY + btnHeight
+        // box ends at boxY + boxH
+        const bottomSpaceStart = saveBtnY + btnHeight;
+        const bottomSpaceEnd = boxY + boxH;
+        const notifY = (bottomSpaceStart + bottomSpaceEnd) / 2;
+
+        context.fillText(this.notificationText, this.canvasWidth / 2, notifY);
         
         context.restore();
     }
@@ -932,8 +966,9 @@ class GameEngine {
   }
 
   drawSettings(context: CanvasRenderingContext2D, layout: any) {
-    const { btnX, btnW, btnHeight, backBtnY, titleY, scale, boxY, boxH } = layout;
+    const { btnX, btnW, btnHeight, backBtnY, titleY, scale, boxY, margin, gap } = layout;
     const titleText = "SETTINGS";
+    const titleLineHeight = 60 * scale;
 
     // Title
     context.textAlign = 'center';
@@ -954,10 +989,84 @@ class GameEngine {
     context.shadowOffsetX = 0;
     context.shadowOffsetY = 0;
 
-    // Placeholder Content
-    context.fillStyle = '#bbb';
+    // --- Controls Layout ---
+    const startY = boxY + margin + titleLineHeight + gap;
+    const btnHeightSmall = 45 * scale;
+    const gapSmall = 15 * scale;
+
+    // 1. Volume Slider
+    const volLabelY = startY + 20 * scale; // Center of the volume row
+    context.fillStyle = 'white';
     context.font = `${24 * scale}px "Fredoka One", cursive`;
-    context.fillText("No settings yet!", this.canvasWidth / 2, boxY + boxH / 2);
+    context.textAlign = 'left';
+    context.textBaseline = 'middle';
+    context.fillText("Volume:", btnX, volLabelY);
+
+    const sliderX = btnX + 105 * scale;
+    const sliderH = 12 * scale;
+    const sliderY = volLabelY - sliderH / 2;
+    const sliderW = btnW - 105 * scale;
+
+    // Bar
+    context.fillStyle = '#444';
+    context.beginPath();
+    context.roundRect(sliderX, sliderY, sliderW, sliderH, sliderH / 2);
+    context.fill();
+    
+    // Fill
+    context.fillStyle = '#4caf50';
+    context.beginPath();
+    context.roundRect(sliderX, sliderY, sliderW * this.settings.volume, sliderH, sliderH / 2);
+    context.fill();
+    
+    // Knob
+    const knobX = sliderX + sliderW * this.settings.volume;
+    context.fillStyle = 'white';
+    context.beginPath();
+    context.arc(knobX, volLabelY, 10 * scale, 0, Math.PI * 2);
+    context.fill();
+    context.strokeStyle = '#2e7d32';
+    context.lineWidth = 2 * scale;
+    context.stroke();
+
+    context.textBaseline = 'alphabetic'; // Reset
+
+    // 2. Toggles
+    const toggleW = btnW;
+    const toggleH = btnHeightSmall;
+    
+    const drawToggle = (text: string, isOn: boolean, y: number, id: string) => {
+        const offset = (this.activeButton === id) ? 3 * scale : 0;
+        const color = isOn ? '#4caf50' : '#f44336';
+        const shadow = isOn ? '#2e7d32' : '#d32f2f';
+        const status = isOn ? "ON" : "OFF";
+
+        context.fillStyle = shadow;
+        context.beginPath();
+        context.roundRect(btnX, y + (5 * scale), toggleW, toggleH, 5 * scale);
+        context.fill();
+
+        context.fillStyle = color;
+        context.beginPath();
+        context.roundRect(btnX, y + offset, toggleW, toggleH, 5 * scale);
+        context.fill();
+
+        context.fillStyle = 'white';
+        context.font = `${24 * scale}px "Fredoka One", cursive`;
+        context.textAlign = 'center';
+        context.textBaseline = 'middle';
+        context.fillText(`${text}: ${status}`, this.canvasWidth/2, y + toggleH/2 + offset);
+    };
+
+    const hpY = startY + 40 * scale + gapSmall;
+    drawToggle("HP Text", this.settings.showHp, hpY, 'toggle_hp');
+
+    const blocksY = hpY + toggleH + gapSmall;
+    drawToggle("Block SFX", this.settings.sfxBlocks, blocksY, 'toggle_blocks');
+
+    const bounceY = blocksY + toggleH + gapSmall;
+    drawToggle("Bounce SFX", this.settings.sfxBounce, bounceY, 'toggle_bounce');
+
 
     // Back Button (Bottom)
     const offset = (this.activeButton === 'back') ? 3 * scale : 0; 
@@ -978,6 +1087,7 @@ class GameEngine {
     context.font = `${30 * scale}px "Fredoka One", cursive`;
     context.shadowColor = 'rgba(0,0,0,0.5)';
     context.shadowBlur = 2 * scale;
+    context.textBaseline = 'middle';
     context.fillText("BACK", this.canvasWidth / 2, backBtnY + (btnHeight / 2) + offset); 
     context.shadowBlur = 0;
     
@@ -1026,6 +1136,9 @@ class GameEngine {
             if (type === 'mousedown') {
                 this.activeButton = 'start';
             } else if (type === 'mouseup' && this.activeButton === 'start') {
+                // Initialize Audio
+                SoundManager.resume();
+
                 // Try Load first
                 const loaded = this.loadGame();
                 
@@ -1047,7 +1160,7 @@ class GameEngine {
         }
             } else if (this.gameState === 'PAUSED') {
                 const layout = this.getPauseMenuLayout();
-                const { btnX, btnW, btnHeight, resumeBtnY, settingsBtnY, saveBtnY, backBtnY, scale } = layout;
+                const { btnX, btnW, btnHeight, resumeBtnY, settingsBtnY, saveBtnY, backBtnY, scale, boxY, margin, gap } = layout;
         
                 if (this.menuState === 'MAIN') {
                     // Check Resume
@@ -1088,8 +1201,68 @@ class GameEngine {
                         if (type === 'mouseup') this.activeButton = null;
                     }
                 } else if (this.menuState === 'SETTINGS') {
+                    const startY = boxY + margin + (60 * scale) + gap; // Matches drawSettings titleLineHeight
+                    const btnHeightSmall = 45 * scale;
+                    const gapSmall = 15 * scale;
+
+                    // 1. Volume Interaction
+                    const volLabelY = startY + 20 * scale;
+                    const sliderX = btnX + 105 * scale;
+                    const sliderW = btnW - 105 * scale;
+                    const sliderH = 24 * scale; // Slightly larger hitbox height
+                    const sliderY = volLabelY - sliderH / 2;
+                    
+                    if ((type === 'mousedown' || (type === 'mousemove' && this.isResizing)) && 
+                        x >= sliderX - 10 && x <= sliderX + sliderW + 10 && 
+                        y >= sliderY - 10 && y <= sliderY + sliderH + 10) {
+                        
+                        this.isResizing = true; // Hijacking resize flag for drag interaction
+                        let vol = (x - sliderX) / sliderW;
+                        if (vol < 0) vol = 0;
+                        if (vol > 1) vol = 1;
+                        this.settings.volume = vol;
+                        SoundManager.volume = vol;
+                        if (type === 'mousedown') this.activeButton = 'volume';
+                    }
+                    if (type === 'mouseup') this.isResizing = false;
+
+                    // 2. Toggles
+                    const hpY = startY + 40 * scale + gapSmall;
+                    const insideHp = x >= btnX && x <= btnX + btnW && y >= hpY && y <= hpY + btnHeightSmall + (5 * scale);
+                    
+                    const blocksY = hpY + btnHeightSmall + gapSmall;
+                    const insideBlocks = x >= btnX && x <= btnX + btnW && y >= blocksY && y <= blocksY + btnHeightSmall + (5 * scale);
+
+                    const bounceY = blocksY + btnHeightSmall + gapSmall;
+                    const insideBounce = x >= btnX && x <= btnX + btnW && y >= bounceY && y <= bounceY + btnHeightSmall + (5 * scale);
+
+                    if (insideHp) {
+                        if (type === 'mousemove') this.isHoveringButton = true;
+                        if (type === 'mousedown') this.activeButton = 'toggle_hp';
+                        else if (type === 'mouseup' && this.activeButton === 'toggle_hp') {
+                            this.settings.showHp = !this.settings.showHp;
+                            this.activeButton = null;
+                        }
+                    } else if (insideBlocks) {
+                        if (type === 'mousemove') this.isHoveringButton = true;
+                        if (type === 'mousedown') this.activeButton = 'toggle_blocks';
+                        else if (type === 'mouseup' && this.activeButton === 'toggle_blocks') {
+                            this.settings.sfxBlocks = !this.settings.sfxBlocks;
+                            SoundManager.muteBlocks = !this.settings.sfxBlocks;
+                            this.activeButton = null;
+                        }
+                    } else if (insideBounce) {
+                        if (type === 'mousemove') this.isHoveringButton = true;
+                        if (type === 'mousedown') this.activeButton = 'toggle_bounce';
+                        else if (type === 'mouseup' && this.activeButton === 'toggle_bounce') {
+                            this.settings.sfxBounce = !this.settings.sfxBounce;
+                            SoundManager.muteBounce = !this.settings.sfxBounce;
+                            this.activeButton = null;
+                        }
+                    }
+
+                    // Back Button
                     const insideBack = x >= btnX && x <= btnX + btnW && y >= backBtnY && y <= backBtnY + btnHeight + (5 * scale);
-        
                     if (insideBack) {
                         if (type === 'mousemove') this.isHoveringButton = true;
                         if (type === 'mousedown') {
@@ -1099,7 +1272,7 @@ class GameEngine {
                             this.activeButton = null;
                         }
                     } else {
-                        if (type === 'mouseup') this.activeButton = null;
+                        if (type === 'mouseup' && !this.isResizing) this.activeButton = null;
                     }
                 }
             } else if (this.gameState === 'PLAYING') {        // Check for Pause Button click
@@ -1185,6 +1358,10 @@ class GameEngine {
         const dot = ball.dx * nx + ball.dy * ny;
         // Only bounce if moving towards the wall (dot < 0)
         if (dot < 0) {
+            // Play sound based on impact speed (approximated by dot product)
+            const impactSpeed = Math.abs(dot);
+            if (impactSpeed > 1) SoundManager.playBounce(impactSpeed / 5);
+
             ball.dx = (ball.dx - 2 * dot * nx) * ball.elasticity;
             ball.dy = (ball.dy - 2 * dot * ny) * ball.elasticity;
             

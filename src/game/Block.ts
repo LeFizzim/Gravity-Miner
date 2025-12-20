@@ -21,7 +21,7 @@ class Block {
     this.col = col;
   }
 
-  draw(context: CanvasRenderingContext2D, offsetY: number = 0, minX: number = -Infinity, maxX: number = Infinity) {
+  draw(context: CanvasRenderingContext2D, offsetY: number = 0, minX: number = -Infinity, maxX: number = Infinity, showHp: boolean = true) {
     const { x, y, radius, color } = this;
     const drawY = y - offsetY;
 
@@ -55,7 +55,7 @@ class Block {
     
     // HP Text
     // Only draw if center is within bounds (with a small buffer so text doesn't clip awkwardly)
-    if (this.radius > 15 && x > minX + 10 && x < maxX - 10) {
+    if (showHp && this.radius > 15 && x > minX + 10 && x < maxX - 10) {
         context.fillStyle = 'rgba(255,255,255,0.8)';
         context.font = `${Math.floor(this.radius/2.5)}px Arial`;
         context.textAlign = 'center';
