@@ -9,6 +9,7 @@ class GameEngine {
   money: number = 0;
   
   gameState: 'MENU' | 'PLAYING' | 'PAUSED' = 'MENU';
+  menuState: 'MAIN' | 'SETTINGS' = 'MAIN'; // Sub-menu state for Pause/Title
   activeButton: string | null = null; // Track active button for animation
   isHoveringButton: boolean = false; // Track hover state for cursor
   isResizing: boolean = false; // Track resize state
@@ -802,55 +803,80 @@ class GameEngine {
     context.textBaseline = 'alphabetic'; // Reset for other text
   }
 
-  drawPauseScreen(context: CanvasRenderingContext2D) {
-    const scale = Math.min(this.canvasWidth, this.canvasHeight) / 1000;
+  getPauseMenuLayout() {
+      const scale = Math.min(this.canvasWidth, this.canvasHeight) / 1000;
+      const margin = 30 * scale;
+      const btnW = 200 * scale;
+      const btnHeight = 55 * scale;
+      const gap = 25 * scale;
+      const titleLineHeight = 60 * scale;
 
-    context.fillStyle = 'rgba(0, 0, 0, 0.5)'; // Darken background less than main menu
+      const btnX = this.canvasWidth / 2 - btnW / 2;
+      
+      let boxH = 0;
+      if (this.menuState === 'MAIN') {
+          boxH = margin + titleLineHeight + gap + (btnHeight * 3) + (gap * 2) + margin;
+      } else {
+          boxH = margin + titleLineHeight + gap + (100 * scale) + gap + btnHeight + margin;
+      }
+      
+      const boxW = btnW + (margin * 2);
+      const boxX = this.canvasWidth / 2 - boxW / 2;
+      const boxY = this.canvasHeight / 2 - boxH / 2;
+
+      // Y positions relative to canvas
+      const titleY = boxY + margin + titleLineHeight / 2;
+      const resumeBtnY = boxY + margin + titleLineHeight + gap;
+      const settingsBtnY = resumeBtnY + btnHeight + gap;
+      const saveBtnY = settingsBtnY + btnHeight + gap;
+      const backBtnY = boxY + boxH - btnHeight - margin;
+
+      return {
+          scale, margin, gap, btnW, btnHeight, btnX,
+          boxX, boxY, boxW, boxH,
+          titleY, resumeBtnY, settingsBtnY, saveBtnY, backBtnY
+      };
+  }
+
+  drawPauseScreen(context: CanvasRenderingContext2D) {
+    const layout = this.getPauseMenuLayout();
+    const { scale, boxX, boxY, boxW, boxH } = layout;
+
+    context.fillStyle = 'rgba(0, 0, 0, 0.5)'; // Darken background
     context.fillRect(0, 0, this.canvasWidth, this.canvasHeight);
 
-    // Box dimensions (Same as Title Screen but taller for 2 buttons)
-    const boxW = 500 * scale;
-    const boxH = 350 * scale; // Increased height
-    const boxX = this.canvasWidth / 2 - boxW / 2;
-    const boxY = this.canvasHeight / 2 - boxH / 2 - (50 * scale); 
-
     // Rounded Grey Box
-    const borderColor = '#1A1A1A'; 
-    const borderWidth = 2 * scale;
     context.fillStyle = 'rgba(50, 50, 50, 0.9)';
-    context.strokeStyle = borderColor;
-    context.lineWidth = borderWidth;
+    context.strokeStyle = '#1A1A1A';
+    context.lineWidth = 2 * scale;
     
     context.beginPath();
     context.roundRect(boxX, boxY, boxW, boxH, 15 * scale);
     context.fill();
     context.stroke();
 
-    // Text "PAUSED"
-    const titleText = "PAUSED";
-    const titleLineHeight = 60 * scale; 
-    const btnHeight = 55 * scale; 
-    const gap = 30 * scale; 
-    
-    // Content Height: Title + Gap + ResumeBtn + Gap + SaveBtn
-    const totalContentHeight = titleLineHeight + gap + btnHeight + gap + btnHeight; 
-    
-    const centerY = boxY + boxH / 2;
-    const startY = centerY - totalContentHeight / 2; // Center it vertically
-    
-    const titleY = startY + titleLineHeight / 2 + (10 * scale);
-    const resumeBtnY = startY + titleLineHeight + gap;
-    const saveBtnY = resumeBtnY + btnHeight + gap;
+    if (this.menuState === 'MAIN') {
+        this.drawPauseMain(context, layout);
+    } else if (this.menuState === 'SETTINGS') {
+        this.drawSettings(context, layout);
+    }
+  }
 
+  drawPauseMain(context: CanvasRenderingContext2D, layout: any) {
+    const { btnX, btnW, btnHeight, resumeBtnY, settingsBtnY, saveBtnY, titleY, scale, boxY, boxH, margin } = layout;
+    const titleText = "PAUSED";
+
+    // Title
     context.textAlign = 'center';
+    context.textBaseline = 'middle';
     context.shadowColor = 'rgba(0, 0, 0, 0.8)';
     context.shadowBlur = 8 * scale; 
     context.shadowOffsetX = 3 * scale; 
     context.shadowOffsetY = 3 * scale; 
     
     context.font = `${48 * scale}px "Fredoka One", cursive`;
-    context.strokeStyle = borderColor; 
-    context.lineWidth = borderWidth;   
+    context.strokeStyle = '#1A1A1A'; 
+    context.lineWidth = 2 * scale;   
     context.strokeText(titleText, this.canvasWidth / 2, titleY); 
     context.fillStyle = 'white'; 
     context.fillText(titleText, this.canvasWidth / 2, titleY); 
@@ -859,73 +885,109 @@ class GameEngine {
     context.shadowOffsetX = 0;
     context.shadowOffsetY = 0;
 
-    // Resume Button
-    const btnW = 200 * scale;
-    const btnX = this.canvasWidth / 2 - btnW / 2;
-    
-    const resumeBtnOffset = (this.activeButton === 'resume') ? 3 * scale : 0; 
+    // --- Buttons ---
+    const drawButton = (text: string, y: number, id: string, color: string, shadowColor: string) => {
+        const offset = (this.activeButton === id) ? 3 * scale : 0; 
+        
+        // Shadow
+        context.fillStyle = shadowColor; 
+        context.beginPath();
+        context.roundRect(btnX, y + (5 * scale), btnW, btnHeight, 5 * scale); 
+        context.fill();
 
-    // Shadow
-    context.fillStyle = '#2e7d32'; 
-    context.beginPath();
-    context.roundRect(btnX, resumeBtnY + (5 * scale), btnW, btnHeight, 5 * scale); 
-    context.fill();
+        // Face
+        context.fillStyle = color;
+        context.beginPath();
+        context.roundRect(btnX, y + offset, btnW, btnHeight, 5 * scale); 
+        context.fill();
+        
+        context.fillStyle = 'white';
+        context.font = `${30 * scale}px "Fredoka One", cursive`;
+        context.shadowColor = 'rgba(0,0,0,0.5)';
+        context.shadowBlur = 2 * scale;
+        context.fillText(text, this.canvasWidth / 2, y + (btnHeight / 2) + offset); 
+        context.shadowBlur = 0;
+    };
 
-    // Face
-    context.fillStyle = '#4caf50';
-    context.beginPath();
-    context.roundRect(btnX, resumeBtnY + resumeBtnOffset, btnW, btnHeight, 5 * scale); 
-    context.fill();
-    
-    context.fillStyle = 'white';
-    context.font = `${30 * scale}px "Fredoka One", cursive`;
-    context.textBaseline = 'middle';
-    context.shadowColor = 'rgba(0,0,0,0.5)';
-    context.shadowBlur = 2 * scale;
-    context.fillText("RESUME", this.canvasWidth / 2, resumeBtnY + (btnHeight / 2) + resumeBtnOffset); 
-    context.shadowBlur = 0;
+    drawButton("RESUME", resumeBtnY, 'resume', '#4caf50', '#2e7d32');
+    drawButton("SETTINGS", settingsBtnY, 'settings', '#ff9800', '#f57c00');
+    drawButton("SAVE GAME", saveBtnY, 'save', '#2196f3', '#1565c0');
 
-    // Save Game Button
-    const saveBtnOffset = (this.activeButton === 'save') ? 3 * scale : 0;
-
-    // Shadow
-    context.fillStyle = '#1565c0'; // Darker Blue
-    context.beginPath();
-    context.roundRect(btnX, saveBtnY + (5 * scale), btnW, btnHeight, 5 * scale); 
-    context.fill();
-
-    // Face
-    context.fillStyle = '#2196f3'; // Blue
-    context.beginPath();
-    context.roundRect(btnX, saveBtnY + saveBtnOffset, btnW, btnHeight, 5 * scale); 
-    context.fill();
-    
-    context.fillStyle = 'white';
-    context.font = `${30 * scale}px "Fredoka One", cursive`;
-    context.shadowColor = 'rgba(0,0,0,0.5)';
-    context.shadowBlur = 2 * scale;
-    context.fillText("SAVE GAME", this.canvasWidth / 2, saveBtnY + (btnHeight / 2) + saveBtnOffset); 
-    context.shadowBlur = 0;
-    context.textBaseline = 'alphabetic'; // Reset
-
-    // Notification Text (Centered Below Save Button)
+    // Notification Text
     if (this.notificationTimer > 0) {
         context.save();
         const alpha = Math.min(1, this.notificationTimer / 500); 
         context.globalAlpha = alpha;
         
-        context.fillStyle = '#4caf50'; // Green text for success
-        context.font = `${24 * scale}px "Fredoka One", cursive`;
+        context.fillStyle = '#4caf50'; 
+        context.font = `${20 * scale}px "Fredoka One", cursive`;
         context.textAlign = 'center';
-        context.fillText(this.notificationText, this.canvasWidth / 2, saveBtnY + btnHeight + gap + (10 * scale));
+        // Positioned inside bottom margin
+        context.fillText(this.notificationText, this.canvasWidth / 2, boxY + boxH - (margin / 2));
         
         context.restore();
     }
+    
+    context.textBaseline = 'alphabetic';
+  }
+
+  drawSettings(context: CanvasRenderingContext2D, layout: any) {
+    const { btnX, btnW, btnHeight, backBtnY, titleY, scale, boxY, boxH } = layout;
+    const titleText = "SETTINGS";
+
+    // Title
+    context.textAlign = 'center';
+    context.textBaseline = 'middle';
+    context.shadowColor = 'rgba(0, 0, 0, 0.8)';
+    context.shadowBlur = 8 * scale; 
+    context.shadowOffsetX = 3 * scale; 
+    context.shadowOffsetY = 3 * scale; 
+    
+    context.font = `${48 * scale}px "Fredoka One", cursive`;
+    context.strokeStyle = '#1A1A1A'; 
+    context.lineWidth = 2 * scale;   
+    context.strokeText(titleText, this.canvasWidth / 2, titleY); 
+    context.fillStyle = 'white'; 
+    context.fillText(titleText, this.canvasWidth / 2, titleY); 
+
+    context.shadowBlur = 0; 
+    context.shadowOffsetX = 0;
+    context.shadowOffsetY = 0;
+
+    // Placeholder Content
+    context.fillStyle = '#bbb';
+    context.font = `${24 * scale}px "Fredoka One", cursive`;
+    context.fillText("No settings yet!", this.canvasWidth / 2, boxY + boxH / 2);
+
+    // Back Button (Bottom)
+    const offset = (this.activeButton === 'back') ? 3 * scale : 0; 
+
+    // Shadow
+    context.fillStyle = '#d32f2f'; // Dark Red
+    context.beginPath();
+    context.roundRect(btnX, backBtnY + (5 * scale), btnW, btnHeight, 5 * scale); 
+    context.fill();
+
+    // Face
+    context.fillStyle = '#f44336'; // Red
+    context.beginPath();
+    context.roundRect(btnX, backBtnY + offset, btnW, btnHeight, 5 * scale); 
+    context.fill();
+    
+    context.fillStyle = 'white';
+    context.font = `${30 * scale}px "Fredoka One", cursive`;
+    context.shadowColor = 'rgba(0,0,0,0.5)';
+    context.shadowBlur = 2 * scale;
+    context.fillText("BACK", this.canvasWidth / 2, backBtnY + (btnHeight / 2) + offset); 
+    context.shadowBlur = 0;
+    
+    context.textBaseline = 'alphabetic';
   }
 
   togglePause() {
       if (this.gameState === 'PLAYING') {
           this.gameState = 'PAUSED';
+          this.menuState = 'MAIN'; // Always open to main menu
       } else if (this.gameState === 'PAUSED') {
           this.gameState = 'PLAYING';
           this.isMouseDown = false; // Reset mouse state on resume
@@ -983,55 +1045,64 @@ class GameEngine {
         } else {
             if (type === 'mouseup') this.activeButton = null;
         }
-    } else if (this.gameState === 'PAUSED') {
-        // Pause Menu Button Logic
-        const scale = Math.min(this.canvasWidth, this.canvasHeight) / 1000;
-        const boxW = 500 * scale;
-        const boxH = 350 * scale; 
-        const boxY = this.canvasHeight / 2 - boxH / 2 - (50 * scale);
-
-        const titleLineHeight = 60 * scale;
-        const btnHeight = 55 * scale; // Correct height matching draw
-        const gap = 30 * scale; 
-        const totalContentHeight = titleLineHeight + gap + btnHeight + gap + btnHeight; 
+            } else if (this.gameState === 'PAUSED') {
+                const layout = this.getPauseMenuLayout();
+                const { btnX, btnW, btnHeight, resumeBtnY, settingsBtnY, saveBtnY, backBtnY, scale } = layout;
         
-        const centerY = boxY + boxH / 2;
-        const startY = centerY - totalContentHeight / 2;
+                if (this.menuState === 'MAIN') {
+                    // Check Resume
+                    const insideResume = x >= btnX && x <= btnX + btnW && y >= resumeBtnY && y <= resumeBtnY + btnHeight + (5 * scale);
+                    // Check Settings
+                    const insideSettings = x >= btnX && x <= btnX + btnW && y >= settingsBtnY && y <= settingsBtnY + btnHeight + (5 * scale);
+                    // Check Save
+                    const insideSave = x >= btnX && x <= btnX + btnW && y >= saveBtnY && y <= saveBtnY + btnHeight + (5 * scale);
         
-        const resumeBtnY = startY + titleLineHeight + gap;
-        const saveBtnY = resumeBtnY + btnHeight + gap;
+                    if (insideResume) {
+                        if (type === 'mousemove') this.isHoveringButton = true;
+                        if (type === 'mousedown') {
+                            this.activeButton = 'resume';
+                        } else if (type === 'mouseup' && this.activeButton === 'resume') {
+                            this.togglePause();
+                            this.activeButton = null;
+                        }
+                    }
+                    else if (insideSettings) {
+                        if (type === 'mousemove') this.isHoveringButton = true;
+                        if (type === 'mousedown') {
+                            this.activeButton = 'settings';
+                        } else if (type === 'mouseup' && this.activeButton === 'settings') {
+                            this.menuState = 'SETTINGS';
+                            this.activeButton = null;
+                        }
+                    } 
+                    else if (insideSave) {
+                        if (type === 'mousemove') this.isHoveringButton = true;
+                        if (type === 'mousedown') {
+                            this.activeButton = 'save';
+                        } else if (type === 'mouseup' && this.activeButton === 'save') {
+                            this.saveGame();
+                            this.activeButton = null;
+                        }
+                    }
+                    else {
+                        if (type === 'mouseup') this.activeButton = null;
+                    }
+                } else if (this.menuState === 'SETTINGS') {
+                    const insideBack = x >= btnX && x <= btnX + btnW && y >= backBtnY && y <= backBtnY + btnHeight + (5 * scale);
         
-        const btnW = 200 * scale;
-        const btnX = this.canvasWidth / 2 - btnW / 2;
-
-        // Check Resume (Include the shadow offset in hit area for better UX)
-        const insideResume = x >= btnX && x <= btnX + btnW && y >= resumeBtnY && y <= resumeBtnY + btnHeight + (5 * scale);
-        // Check Save
-        const insideSave = x >= btnX && x <= btnX + btnW && y >= saveBtnY && y <= saveBtnY + btnHeight + (5 * scale);
-
-        if (insideResume) {
-            if (type === 'mousemove') this.isHoveringButton = true;
-            if (type === 'mousedown') {
-                this.activeButton = 'resume';
-            } else if (type === 'mouseup' && this.activeButton === 'resume') {
-                this.togglePause();
-                this.activeButton = null;
-            }
-        } 
-        else if (insideSave) {
-            if (type === 'mousemove') this.isHoveringButton = true;
-            if (type === 'mousedown') {
-                this.activeButton = 'save';
-            } else if (type === 'mouseup' && this.activeButton === 'save') {
-                this.saveGame();
-                this.activeButton = null;
-            }
-        }
-        else {
-            if (type === 'mouseup') this.activeButton = null;
-        }
-    } else if (this.gameState === 'PLAYING') {
-        // Check for Pause Button click
+                    if (insideBack) {
+                        if (type === 'mousemove') this.isHoveringButton = true;
+                        if (type === 'mousedown') {
+                            this.activeButton = 'back';
+                        } else if (type === 'mouseup' && this.activeButton === 'back') {
+                            this.menuState = 'MAIN';
+                            this.activeButton = null;
+                        }
+                    } else {
+                        if (type === 'mouseup') this.activeButton = null;
+                    }
+                }
+            } else if (this.gameState === 'PLAYING') {        // Check for Pause Button click
         const hudMargin = 20 * scale;
         const pauseBtnSize = 60 * scale;
         const pauseBtnX = hudMargin;
