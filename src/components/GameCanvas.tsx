@@ -52,6 +52,7 @@ const GameCanvas: React.FC = () => {
 
     const onMouseDown = (e: MouseEvent) => handleInput('mousedown', e);
     const onMouseUp = (e: MouseEvent) => handleInput('mouseup', e);
+    const onMouseMove = (e: MouseEvent) => handleInput('mousemove', e);
     
     // Basic touch support
     const onTouchStart = (e: TouchEvent) => handleInput('mousedown', e);
@@ -67,6 +68,7 @@ const GameCanvas: React.FC = () => {
     window.addEventListener('keydown', onKeyDown);
     canvas.addEventListener('mousedown', onMouseDown);
     canvas.addEventListener('mouseup', onMouseUp);
+    canvas.addEventListener('mousemove', onMouseMove);
     canvas.addEventListener('touchstart', onTouchStart);
     canvas.addEventListener('touchend', onTouchEnd);
 
@@ -83,6 +85,9 @@ const GameCanvas: React.FC = () => {
       // Update and Draw Engine
       engine.update(dt);
       engine.draw(context);
+      
+      // Update Cursor
+      canvas.style.cursor = engine.isHoveringButton ? 'pointer' : 'default';
 
       animationFrameId = requestAnimationFrame(gameLoop);
     };
@@ -95,6 +100,7 @@ const GameCanvas: React.FC = () => {
       window.removeEventListener('keydown', onKeyDown);
       canvas.removeEventListener('mousedown', onMouseDown);
       canvas.removeEventListener('mouseup', onMouseUp);
+      canvas.removeEventListener('mousemove', onMouseMove);
       canvas.removeEventListener('touchstart', onTouchStart);
       canvas.removeEventListener('touchend', onTouchEnd);
     };

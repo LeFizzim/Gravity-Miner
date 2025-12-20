@@ -9,7 +9,8 @@ class GameEngine {
   money: number = 0;
   
   gameState: 'MENU' | 'PLAYING' | 'PAUSED' = 'MENU';
-  isMouseDown: boolean = false; // Track mouse state
+  activeButton: string | null = null; // Track active button for animation
+  isHoveringButton: boolean = false; // Track hover state for cursor
   isResizing: boolean = false; // Track resize state
 
   // Camera/Scroll offset
@@ -26,6 +27,17 @@ class GameEngine {
   
   // Visuals
   dirtPattern: CanvasPattern | null = null;
+  
+  // Save State Key
+  readonly SAVE_KEY = 'gravity_miner_save_v1';
+
+  // Notification System
+  notificationText: string = "";
+  notificationTimer: number = 0;
+
+  // Auto-Save System
+  autoSaveTimer: number = 0;
+  readonly AUTO_SAVE_INTERVAL: number = 5 * 60 * 1000; // 5 Minutes
   
   constructor(width: number, height: number) {
     this.canvasWidth = width;
@@ -64,8 +76,13 @@ class GameEngine {
     // Create Pattern
     this.initDirtPattern();
 
-    // Initial generation
-    this.generateRows(0, 40);
+    // Try to load save for background preview
+    if (this.loadGame()) {
+        this.gameState = 'MENU';
+    } else {
+        // Initial generation if no save
+        this.generateRows(0, 40);
+    }
   }
   
   initDirtPattern() {
@@ -96,6 +113,125 @@ class GameEngine {
       }
       
       this.dirtPattern = ctx.createPattern(pCanvas, 'repeat');
+  }
+
+  saveGame() {
+      const data = {
+          money: this.money,
+          offsetY: this.offsetY,
+          maxRowGenerated: this.maxRowGenerated,
+          rowHeight: this.rowHeight,
+          canvasWidth: this.canvasWidth,
+          canvasHeight: this.canvasHeight,
+          ball: {
+              x: this.ball.x,
+              y: this.ball.y,
+              dx: this.ball.dx,
+              dy: this.ball.dy,
+              radius: this.ball.radius
+          },
+          blocks: this.blocks.map(b => ({
+              x: b.x,
+              y: b.y,
+              row: b.row,
+              col: b.col,
+              hp: b.hp,
+              maxHp: b.maxHp,
+              value: b.value,
+              color: b.color,
+              radius: b.radius
+          }))
+      };
+      
+      try {
+          // Encode to Base64 to obfuscate
+          const json = JSON.stringify(data);
+          const encoded = btoa(json);
+          localStorage.setItem(this.SAVE_KEY, encoded);
+          console.log("Game Saved!");
+          this.showNotification("Game Saved!");
+      } catch (e) {
+          console.error("Failed to save game:", e);
+          this.showNotification("Save Failed!");
+      }
+  }
+
+  showNotification(text: string) {
+      this.notificationText = text;
+      this.notificationTimer = 2000; // 2 seconds
+  }
+
+  loadGame(): boolean {
+      const encoded = localStorage.getItem(this.SAVE_KEY);
+      if (!encoded) return false;
+      
+      try {
+          // Decode from Base64
+          const json = atob(encoded);
+          const data = JSON.parse(json);
+          
+          this.money = data.money;
+          this.offsetY = data.offsetY;
+          this.maxRowGenerated = data.maxRowGenerated;
+          this.rowHeight = data.rowHeight; // Temporarily set to saved value for resize logic
+          
+          // Restore Ball
+          this.ball.x = data.ball.x;
+          this.ball.y = data.ball.y;
+          this.ball.dx = data.ball.dx;
+          this.ball.dy = data.ball.dy;
+          this.ball.radius = data.ball.radius;
+          
+          // Restore Blocks
+          this.blocks = data.blocks.map((b: any) => {
+              const block = new Block(b.x, b.y, b.radius, b.hp, b.value, b.color, b.row, b.col);
+              block.maxHp = b.maxHp;
+              return block;
+          });
+
+          // Handle Resize if saved dimensions differ from current
+          // We set current dims to Saved dims, then call resize to Current Actual dims
+          const savedW = data.canvasWidth;
+          const savedH = data.canvasHeight;
+          
+          // Force engine to think it is the saved size
+          this.canvasWidth = savedW;
+          this.canvasHeight = savedH;
+          this.holeWidth = savedW / 2;
+          this.holeLeft = (savedW - this.holeWidth) / 2;
+
+          // Now resize to the real window size
+          // We need to pass the real dimensions which we want to target.
+          // Since we are inside loadGame, we can assume 'this.canvasWidth' WAS the current size before we overwrote it.
+          // Wait, we need to know the *target* size. 
+          // Implementation detail: loadGame is called from MENU. 
+          // The engine instance already has the *current* window size in this.canvasWidth/Height before we overwrite it.
+          // So let's capture real dims first.
+          
+          // Actually, we can just grab window innerWidth/Height or pass it in?
+          // Simpler: The caller (handleInput) calls loadGame. 
+          // The engine *already* has the correct current dimensions in properties.
+          const targetW = this.canvasWidth;
+          const targetH = this.canvasHeight;
+
+          if (savedW !== targetW || savedH !== targetH) {
+             // We pretend we are the old size
+             this.canvasWidth = savedW;
+             this.canvasHeight = savedH;
+             this.updateGeometry(); // Reset hole geometry to saved
+             
+             // Now call resize to update to target
+             this.resize(targetW, targetH);
+          } else {
+             // Just ensure geometry is correct for current size
+             this.updateGeometry();
+          }
+          
+          return true;
+      } catch (e) {
+          console.error("Failed to load save:", e);
+          return false;
+      }
   }
   
   updateGeometry() {
@@ -242,6 +378,18 @@ class GameEngine {
   }
 
   update(dt: number) {
+    if (this.notificationTimer > 0) {
+        this.notificationTimer -= dt;
+    }
+
+    if (this.gameState === 'PLAYING') {
+        this.autoSaveTimer += dt;
+        if (this.autoSaveTimer >= this.AUTO_SAVE_INTERVAL) {
+            this.saveGame();
+            this.autoSaveTimer = 0;
+        }
+    }
+
     if (this.gameState === 'MENU' || this.gameState === 'PAUSED' || this.isResizing) {
         return;
     }
@@ -325,6 +473,9 @@ class GameEngine {
     } else if (this.gameState === 'PAUSED') {
         this.drawPauseScreen(context);
     } else {
+        this.togglePause = this.togglePause.bind(this); // Ensure 'this' context if needed, though arrow functions are better.
+        // Actually, just fixing the draw logic:
+        
         const scale = Math.min(this.canvasWidth, this.canvasHeight) / 1000;
         
         // Draw HUD (Top Right)
@@ -377,6 +528,53 @@ class GameEngine {
         context.roundRect(centerX - barGap/2 - barW, centerY - barH/2, barW, barH, 2 * scale);
         context.roundRect(centerX + barGap/2, centerY - barH/2, barW, barH, 2 * scale);
         context.fill();
+        
+        // Draw Save Button (Bottom Left)
+        const saveBtnSize = 60 * scale;
+        const saveBtnX = hudMargin;
+        const saveBtnY = this.canvasHeight - saveBtnSize - hudMargin;
+
+        // Rounded Rect Background for Save
+        context.fillStyle = 'rgba(50, 50, 50, 0.8)';
+        context.beginPath();
+        context.roundRect(saveBtnX, saveBtnY, saveBtnSize, saveBtnSize, 10 * scale);
+        context.fill();
+
+        // Save Icon (Floppy Disk-ish)
+        context.fillStyle = 'white';
+        const iconSize = saveBtnSize * 0.6;
+        const iconX = saveBtnX + (saveBtnSize - iconSize) / 2;
+        const iconY = saveBtnY + (saveBtnSize - iconSize) / 2;
+
+        context.beginPath();
+        // Main body
+        context.moveTo(iconX, iconY);
+        context.lineTo(iconX + iconSize - (5 * scale), iconY); // Top right cut
+        context.lineTo(iconX + iconSize, iconY + (5 * scale));
+        context.lineTo(iconX + iconSize, iconY + iconSize);
+        context.lineTo(iconX, iconY + iconSize);
+        context.closePath();
+        context.fill();
+        
+        // White space (shutter?)
+        context.fillStyle = '#333'; // Dark grey hole
+        context.fillRect(iconX + iconSize * 0.2, iconY + iconSize * 0.55, iconSize * 0.6, iconSize * 0.35);
+        context.fillStyle = 'white'; // Slider
+        context.fillRect(iconX + iconSize * 0.3, iconY + iconSize * 0.6, iconSize * 0.2, iconSize * 0.2);
+
+        // Draw Notification
+        if (this.notificationTimer > 0) {
+            context.save();
+            const alpha = Math.min(1, this.notificationTimer / 500); // Fade out in last 500ms
+            context.globalAlpha = alpha;
+            
+            context.fillStyle = 'white';
+            context.font = `${20 * scale}px "Fredoka One", cursive`;
+            context.textAlign = 'left';
+            context.fillText(this.notificationText, saveBtnX + saveBtnSize + (15 * scale), saveBtnY + saveBtnSize / 2 + (7 * scale));
+            
+            context.restore();
+        }
     }
   }
 
@@ -576,7 +774,11 @@ class GameEngine {
     const btnH = 50 * scale;
     const btnX = this.canvasWidth / 2 - btnW / 2;
     
-    const btnOffset = this.isMouseDown ? 3 * scale : 0; // Shift button down if pressed
+    const btnOffset = (this.activeButton === 'start') ? 3 * scale : 0; // Shift button down if pressed
+
+    // Check for Save
+    const hasSave = !!localStorage.getItem(this.SAVE_KEY);
+    const btnText = hasSave ? "CONTINUE" : "START";
 
     // 3D Shadow (Darker Green)
     context.fillStyle = '#2e7d32'; 
@@ -592,10 +794,12 @@ class GameEngine {
     
     context.fillStyle = 'white';
     context.font = `${30 * scale}px "Fredoka One", cursive`;
+    context.textBaseline = 'middle'; // Vertically center text
     context.shadowColor = 'rgba(0,0,0,0.5)';
     context.shadowBlur = 2 * scale;
-    context.fillText("START", this.canvasWidth / 2, btnY + (35 * scale) + btnOffset); // Apply offset to text
+    context.fillText(btnText, this.canvasWidth / 2, btnY + (btnH / 2) + btnOffset); 
     context.shadowBlur = 0;
+    context.textBaseline = 'alphabetic'; // Reset for other text
   }
 
   drawPauseScreen(context: CanvasRenderingContext2D) {
@@ -604,11 +808,11 @@ class GameEngine {
     context.fillStyle = 'rgba(0, 0, 0, 0.5)'; // Darken background less than main menu
     context.fillRect(0, 0, this.canvasWidth, this.canvasHeight);
 
-    // Box dimensions (Same as Title Screen)
+    // Box dimensions (Same as Title Screen but taller for 2 buttons)
     const boxW = 500 * scale;
-    const boxH = 250 * scale; 
+    const boxH = 350 * scale; // Increased height
     const boxX = this.canvasWidth / 2 - boxW / 2;
-    const boxY = this.canvasHeight / 2 - boxH / 2 - (100 * scale); 
+    const boxY = this.canvasHeight / 2 - boxH / 2 - (50 * scale); 
 
     // Rounded Grey Box
     const borderColor = '#1A1A1A'; 
@@ -628,14 +832,15 @@ class GameEngine {
     const btnHeight = 55 * scale; 
     const gap = 30 * scale; 
     
-    // Content Height: Title + Gap + Button
-    const totalContentHeight = titleLineHeight + gap + btnHeight; 
+    // Content Height: Title + Gap + ResumeBtn + Gap + SaveBtn
+    const totalContentHeight = titleLineHeight + gap + btnHeight + gap + btnHeight; 
     
     const centerY = boxY + boxH / 2;
     const startY = centerY - totalContentHeight / 2; // Center it vertically
     
     const titleY = startY + titleLineHeight / 2 + (10 * scale);
-    const btnY = startY + titleLineHeight + gap;
+    const resumeBtnY = startY + titleLineHeight + gap;
+    const saveBtnY = resumeBtnY + btnHeight + gap;
 
     context.textAlign = 'center';
     context.shadowColor = 'rgba(0, 0, 0, 0.8)';
@@ -656,29 +861,66 @@ class GameEngine {
 
     // Resume Button
     const btnW = 200 * scale;
-    const btnH = 50 * scale;
     const btnX = this.canvasWidth / 2 - btnW / 2;
     
-    const btnOffset = this.isMouseDown ? 3 * scale : 0; 
+    const resumeBtnOffset = (this.activeButton === 'resume') ? 3 * scale : 0; 
 
     // Shadow
     context.fillStyle = '#2e7d32'; 
     context.beginPath();
-    context.roundRect(btnX, btnY + (5 * scale), btnW, btnH, 5 * scale); 
+    context.roundRect(btnX, resumeBtnY + (5 * scale), btnW, btnHeight, 5 * scale); 
     context.fill();
 
     // Face
     context.fillStyle = '#4caf50';
     context.beginPath();
-    context.roundRect(btnX, btnY + btnOffset, btnW, btnH, 5 * scale); 
+    context.roundRect(btnX, resumeBtnY + resumeBtnOffset, btnW, btnHeight, 5 * scale); 
+    context.fill();
+    
+    context.fillStyle = 'white';
+    context.font = `${30 * scale}px "Fredoka One", cursive`;
+    context.textBaseline = 'middle';
+    context.shadowColor = 'rgba(0,0,0,0.5)';
+    context.shadowBlur = 2 * scale;
+    context.fillText("RESUME", this.canvasWidth / 2, resumeBtnY + (btnHeight / 2) + resumeBtnOffset); 
+    context.shadowBlur = 0;
+
+    // Save Game Button
+    const saveBtnOffset = (this.activeButton === 'save') ? 3 * scale : 0;
+
+    // Shadow
+    context.fillStyle = '#1565c0'; // Darker Blue
+    context.beginPath();
+    context.roundRect(btnX, saveBtnY + (5 * scale), btnW, btnHeight, 5 * scale); 
+    context.fill();
+
+    // Face
+    context.fillStyle = '#2196f3'; // Blue
+    context.beginPath();
+    context.roundRect(btnX, saveBtnY + saveBtnOffset, btnW, btnHeight, 5 * scale); 
     context.fill();
     
     context.fillStyle = 'white';
     context.font = `${30 * scale}px "Fredoka One", cursive`;
     context.shadowColor = 'rgba(0,0,0,0.5)';
     context.shadowBlur = 2 * scale;
-    context.fillText("RESUME", this.canvasWidth / 2, btnY + (35 * scale) + btnOffset); 
+    context.fillText("SAVE GAME", this.canvasWidth / 2, saveBtnY + (btnHeight / 2) + saveBtnOffset); 
     context.shadowBlur = 0;
+    context.textBaseline = 'alphabetic'; // Reset
+
+    // Notification Text (Centered Below Save Button)
+    if (this.notificationTimer > 0) {
+        context.save();
+        const alpha = Math.min(1, this.notificationTimer / 500); 
+        context.globalAlpha = alpha;
+        
+        context.fillStyle = '#4caf50'; // Green text for success
+        context.font = `${24 * scale}px "Fredoka One", cursive`;
+        context.textAlign = 'center';
+        context.fillText(this.notificationText, this.canvasWidth / 2, saveBtnY + btnHeight + gap + (10 * scale));
+        
+        context.restore();
+    }
   }
 
   togglePause() {
@@ -692,6 +934,11 @@ class GameEngine {
 
   handleInput(type: string, x: number, y: number) {
     const scale = Math.min(this.canvasWidth, this.canvasHeight) / 1000;
+    
+    // Reset hover state by default (will be set to true if inside a button)
+    if (type === 'mousemove') {
+        this.isHoveringButton = false;
+    }
 
     if (this.gameState === 'MENU') {
         const btnW = 200 * scale;
@@ -702,53 +949,86 @@ class GameEngine {
         const titleLineHeight = 50 * scale;
         const btnHeight = 55 * scale;
         const gap = 25 * scale;
-        const totalContentHeight = titleLineHeight * 2 + gap + btnHeight;
+        const totalContentHeight = titleLineHeight * 2 + gap + btnHeight; 
         const centerY = boxY + boxH / 2;
         const startY = centerY - totalContentHeight / 2 - (15 * scale);
         const btnY = startY + titleLineHeight * 2 + gap;
 
         const btnX = this.canvasWidth / 2 - btnW / 2;
 
-        if (x >= btnX && x <= btnX + btnW && y >= btnY && y <= btnY + btnH + (5 * scale)) {
+        const insideBtn = x >= btnX && x <= btnX + btnW && y >= btnY && y <= btnY + btnH + (5 * scale);
+
+        if (insideBtn) {
+            if (type === 'mousemove') this.isHoveringButton = true;
+            
             if (type === 'mousedown') {
-                this.isMouseDown = true;
-            } else if (type === 'mouseup' && this.isMouseDown) {
-                this.gameState = 'PLAYING';
+                this.activeButton = 'start';
+            } else if (type === 'mouseup' && this.activeButton === 'start') {
+                // Try Load first
+                const loaded = this.loadGame();
                 
-                // Scale initial velocity by radius to keep gameplay consistent across sizes
-                const radius = this.rowHeight / 1.5; 
-                this.ball.dx = (Math.random() - 0.5) * (radius * 0.15); // Scaled horizontal speed
-                this.ball.dy = radius * 0.4; // Stronger vertical speed (0.4)
+                if (!loaded) {
+                    this.gameState = 'PLAYING';
+                    
+                    // Scale initial velocity by radius to keep gameplay consistent across sizes
+                    const radius = this.rowHeight / 1.5; 
+                    this.ball.dx = (Math.random() - 0.5) * (radius * 0.15); // Scaled horizontal speed
+                    this.ball.dy = radius * 0.4; // Stronger vertical speed (0.4)
+                } else {
+                    this.gameState = 'PLAYING';
+                }
                 
-                this.isMouseDown = false;
+                this.activeButton = null;
             }
         } else {
-            if (type === 'mouseup') this.isMouseDown = false;
+            if (type === 'mouseup') this.activeButton = null;
         }
     } else if (this.gameState === 'PAUSED') {
         // Pause Menu Button Logic
-        const btnW = 200 * scale;
-        const btnH = 50 * scale;
-        const boxH = 250 * scale;
-        const boxY = this.canvasHeight / 2 - boxH / 2 - (100 * scale);
+        const scale = Math.min(this.canvasWidth, this.canvasHeight) / 1000;
+        const boxW = 500 * scale;
+        const boxH = 350 * scale; 
+        const boxY = this.canvasHeight / 2 - boxH / 2 - (50 * scale);
 
         const titleLineHeight = 60 * scale;
-        const btnHeight = 55 * scale; 
+        const btnHeight = 55 * scale; // Correct height matching draw
         const gap = 30 * scale; 
-        const totalContentHeight = titleLineHeight + gap + btnHeight; 
+        const totalContentHeight = titleLineHeight + gap + btnHeight + gap + btnHeight; 
+        
         const centerY = boxY + boxH / 2;
         const startY = centerY - totalContentHeight / 2;
-        const btnY = startY + titleLineHeight + gap;
+        
+        const resumeBtnY = startY + titleLineHeight + gap;
+        const saveBtnY = resumeBtnY + btnHeight + gap;
+        
+        const btnW = 200 * scale;
         const btnX = this.canvasWidth / 2 - btnW / 2;
 
-        if (x >= btnX && x <= btnX + btnW && y >= btnY && y <= btnY + btnH + (5 * scale)) {
+        // Check Resume (Include the shadow offset in hit area for better UX)
+        const insideResume = x >= btnX && x <= btnX + btnW && y >= resumeBtnY && y <= resumeBtnY + btnHeight + (5 * scale);
+        // Check Save
+        const insideSave = x >= btnX && x <= btnX + btnW && y >= saveBtnY && y <= saveBtnY + btnHeight + (5 * scale);
+
+        if (insideResume) {
+            if (type === 'mousemove') this.isHoveringButton = true;
             if (type === 'mousedown') {
-                this.isMouseDown = true;
-            } else if (type === 'mouseup' && this.isMouseDown) {
+                this.activeButton = 'resume';
+            } else if (type === 'mouseup' && this.activeButton === 'resume') {
                 this.togglePause();
+                this.activeButton = null;
             }
-        } else {
-            if (type === 'mouseup') this.isMouseDown = false;
+        } 
+        else if (insideSave) {
+            if (type === 'mousemove') this.isHoveringButton = true;
+            if (type === 'mousedown') {
+                this.activeButton = 'save';
+            } else if (type === 'mouseup' && this.activeButton === 'save') {
+                this.saveGame();
+                this.activeButton = null;
+            }
+        }
+        else {
+            if (type === 'mouseup') this.activeButton = null;
         }
     } else if (this.gameState === 'PLAYING') {
         // Check for Pause Button click
@@ -757,16 +1037,38 @@ class GameEngine {
         const pauseBtnX = hudMargin;
         const pauseBtnY = hudMargin;
 
-        if (x >= pauseBtnX && x <= pauseBtnX + pauseBtnSize && y >= pauseBtnY && y <= pauseBtnY + pauseBtnSize) {
+        const insidePause = x >= pauseBtnX && x <= pauseBtnX + pauseBtnSize && y >= pauseBtnY && y <= pauseBtnY + pauseBtnSize;
+
+        // Check for Save Button click (Bottom Left)
+        const saveBtnSize = 60 * scale;
+        const saveBtnX = hudMargin;
+        const saveBtnY = this.canvasHeight - saveBtnSize - hudMargin;
+        
+        const insideSaveIcon = x >= saveBtnX && x <= saveBtnX + saveBtnSize && y >= saveBtnY && y <= saveBtnY + saveBtnSize;
+
+        if (insidePause) {
+            if (type === 'mousemove') this.isHoveringButton = true;
             if (type === 'mousedown') {
-                this.isMouseDown = true;
-            } else if (type === 'mouseup' && this.isMouseDown) {
+                this.activeButton = 'pause_icon';
+            } else if (type === 'mouseup' && this.activeButton === 'pause_icon') {
                 this.togglePause();
-                this.isMouseDown = false;
+                this.activeButton = null;
             }
-        } else {
-             if (type === 'mouseup') this.isMouseDown = false;
+            return;
         }
+
+        if (insideSaveIcon) {
+            if (type === 'mousemove') this.isHoveringButton = true;
+            if (type === 'mousedown') {
+                this.activeButton = 'save_icon';
+            } else if (type === 'mouseup' && this.activeButton === 'save_icon') {
+                this.saveGame();
+                this.activeButton = null;
+            }
+            return;
+        }
+
+        if (type === 'mouseup') this.activeButton = null;
     }
   }
 
