@@ -990,7 +990,7 @@ class GameEngine {
           this.menuState = 'MAIN'; // Always open to main menu
       } else if (this.gameState === 'PAUSED') {
           this.gameState = 'PLAYING';
-          this.isMouseDown = false; // Reset mouse state on resume
+          this.activeButton = null; // Reset mouse state on resume
       }
   }
 
