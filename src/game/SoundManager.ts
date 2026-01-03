@@ -31,17 +31,16 @@ class SoundManager {
 
   playPop() {
     if (this.muteBlocks) return;
-    this.playSound(800, 'pop');
+    this.playSound('pop');
   }
 
   playBounce(velocity: number = 1) {
       if (this.muteBounce) return;
       // Scale frequency slightly with velocity?
-      // Base freq lower than pop, maybe 300-400Hz
-      this.playSound(300, 'bounce', Math.min(velocity, 1.5));
+      this.playSound('bounce', Math.min(velocity, 1.5));
   }
 
-  private playSound(freq: number, type: 'pop' | 'bounce', intensity: number = 1.0) {
+  private playSound(type: 'pop' | 'bounce', intensity: number = 1.0) {
     const ctx = this.getContext();
     if (!ctx) return;
 
