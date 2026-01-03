@@ -2,6 +2,64 @@ import Ball from './Ball';
 import Block from './Block';
 import SoundManager from './SoundManager';
 
+interface MenuLayout {
+    scale: number;
+    margin: number;
+    gap: number;
+    btnW: number;
+    btnHeight: number;
+    btnX: number;
+    boxX: number;
+    boxY: number;
+    boxW: number;
+    boxH: number;
+    titleY: number;
+    resumeBtnY: number;
+    shopBtnY: number;
+    settingsBtnY: number;
+    saveBtnY: number;
+    backBtnY: number;
+}
+
+interface SaveData {
+    money: number;
+    settings: {
+        showHp: boolean;
+        volume: number;
+        sfxBlocks: boolean;
+        sfxBounce: boolean;
+    };
+    upgrades: {
+        damage: number;
+        gravity: number;
+        efficiency: number;
+    };
+    offsetY: number;
+    maxRowGenerated: number;
+    rowHeight: number;
+    canvasWidth: number;
+    canvasHeight: number;
+    ball: {
+        x: number;
+        y: number;
+        dx: number;
+        dy: number;
+        radius: number;
+        damage?: number;
+    };
+    blocks: Array<{
+        x: number;
+        y: number;
+        row: number;
+        col: number;
+        hp: number;
+        maxHp: number;
+        value: number;
+        color: string;
+        radius: number;
+    }>;
+}
+
 class GameEngine {
   ball: Ball;
   blocks: Block[];
@@ -10,10 +68,18 @@ class GameEngine {
   money: number = 0;
   
   gameState: 'MENU' | 'PLAYING' | 'PAUSED' = 'MENU';
-  menuState: 'MAIN' | 'SETTINGS' = 'MAIN'; // Sub-menu state for Pause/Title
+  menuState: 'MAIN' | 'SETTINGS' | 'SHOP' = 'MAIN'; // Sub-menu state for Pause/Title
   activeButton: string | null = null; // Track active button for animation
   isHoveringButton: boolean = false; // Track hover state for cursor
   isResizing: boolean = false; // Track resize state
+
+  // Upgrades State
+  upgrades = {
+      damage: 1,
+      gravity: 1,
+      efficiency: 1,
+      // offline: 0
+  };
 
   // Camera/Scroll offset
   offsetY: number = -300; 
@@ -76,7 +142,7 @@ class GameEngine {
       (Math.random() - 0.5) * 4, 
       0, 
       radius * 0.02, // Dynamic Gravity 
-      0.95  
+      0.98  
     );
     
     // Set initial offset to center the view
@@ -129,6 +195,7 @@ class GameEngine {
       const data = {
           money: this.money,
           settings: this.settings,
+          upgrades: this.upgrades,
           offsetY: this.offsetY,
           maxRowGenerated: this.maxRowGenerated,
           rowHeight: this.rowHeight,
@@ -139,7 +206,8 @@ class GameEngine {
               y: this.ball.y,
               dx: this.ball.dx,
               dy: this.ball.dy,
-              radius: this.ball.radius
+              radius: this.ball.radius,
+              damage: this.ball.damage
           },
           blocks: this.blocks.map(b => ({
               x: b.x,
@@ -179,12 +247,22 @@ class GameEngine {
       try {
           // Decode from Base64
           const json = atob(encoded);
-          const data = JSON.parse(json);
+          const data: SaveData = JSON.parse(json);
           
           this.money = data.money;
           if (data.settings) {
               this.settings = { ...this.settings, ...data.settings };
           }
+          if (data.upgrades) {
+              this.upgrades = { ...this.upgrades, ...data.upgrades };
+              
+              // Apply Gravity Upgrade
+              // Radius is derived from rowHeight: rowHeight = radius * 1.5 => radius = rowHeight / 1.5
+              const radius = this.rowHeight / 1.5;
+              const gravityMult = 1 + (this.upgrades.gravity - 1) * 0.1;
+              this.ball.gravity = radius * 0.02 * gravityMult;
+          }
+
           // Sync SoundManager
           SoundManager.volume = this.settings.volume;
           SoundManager.muteBlocks = !this.settings.sfxBlocks;
@@ -200,9 +278,10 @@ class GameEngine {
           this.ball.dx = data.ball.dx;
           this.ball.dy = data.ball.dy;
           this.ball.radius = data.ball.radius;
+          if (data.ball.damage) this.ball.damage = data.ball.damage;
           
           // Restore Blocks
-          this.blocks = data.blocks.map((b: any) => {
+          this.blocks = data.blocks.map(b => {
               const block = new Block(b.x, b.y, b.radius, b.hp, b.value, b.color, b.row, b.col);
               block.maxHp = b.maxHp;
               return block;
@@ -339,7 +418,8 @@ class GameEngine {
       }
       
       // Always update gravity based on new radius
-      this.ball.gravity = radius * 0.02; 
+      const gravityMult = 1 + (this.upgrades.gravity - 1) * 0.1;
+      this.ball.gravity = radius * 0.02 * gravityMult;
 
       // Update existing blocks
       this.blocks.forEach(block => {
@@ -368,11 +448,11 @@ class GameEngine {
             const xOffset = (r % 2 === 0) ? 0 : -dx / 2;
             
             // cx is relative to hole start
-            let cx = c * dx + xOffset;
+            const cx = c * dx + xOffset;
             
             // Shift to hole position
-            let finalX = cx + this.holeLeft;
-            let finalY = startY + r * dy;
+            const finalX = cx + this.holeLeft;
+            const finalY = startY + r * dy;
 
             // Ensure we stay within visual bounds of the hole mostly
             // Allow slightly outside for the "half block" effect
@@ -439,9 +519,8 @@ class GameEngine {
 
     // Camera follow
     const targetY = this.ball.y - this.canvasHeight / 3;
-    if (targetY > this.offsetY) {
-         this.offsetY = this.offsetY + (targetY - this.offsetY) * 0.1;
-    }
+    // Smoothly interpolate camera position towards target (up or down)
+    this.offsetY = this.offsetY + (targetY - this.offsetY) * 0.1;
     
     // Infinite Generation
     let currentDeepestY = 250 + this.maxRowGenerated * this.rowHeight;
@@ -456,10 +535,11 @@ class GameEngine {
       if (Math.abs(block.y - this.ball.y) > 200 || Math.abs(block.x - this.ball.x) > 200) continue;
 
       if (this.checkCollision(this.ball, block)) {
-        const destroyed = block.takeDamage(1);
+        const destroyed = block.takeDamage(this.ball.damage);
         if (destroyed) {
           this.blocks.splice(i, 1);
-          this.money += block.value;
+          const efficiencyMult = 1 + (this.upgrades.efficiency - 1) * 0.2;
+          this.money += Math.ceil(block.value * efficiencyMult);
           SoundManager.playPop();
         }
       }
@@ -827,7 +907,12 @@ class GameEngine {
   getPauseMenuLayout() {
       const scale = Math.min(this.canvasWidth, this.canvasHeight) / 1000;
       const margin = 50 * scale; // Increased margin
-      const btnW = 200 * scale;
+      
+      let btnW = 200 * scale;
+      if (this.menuState === 'SHOP') {
+          btnW = 400 * scale;
+      }
+      
       const btnHeight = 55 * scale;
       const gap = 25 * scale;
       const titleLineHeight = 60 * scale;
@@ -836,8 +921,8 @@ class GameEngine {
       
       let boxH = 0;
       if (this.menuState === 'MAIN') {
-          // Extra space at bottom for notification (approx 30 * scale)
-          boxH = margin + titleLineHeight + gap + (btnHeight * 3) + (gap * 2) + (30 * scale) + margin;
+          // Extra space for SHOP button (btnHeight + gap)
+          boxH = margin + titleLineHeight + gap + (btnHeight * 4) + (gap * 3) + (30 * scale) + margin;
       } else {
           // Settings Height: Title + Volume + 3 Toggles + Back + Spacing
           // Recalculated for larger margins: ~485+ needed. Setting to 520 for safety.
@@ -851,14 +936,15 @@ class GameEngine {
       // Y positions relative to canvas
       const titleY = boxY + margin + titleLineHeight / 2;
       const resumeBtnY = boxY + margin + titleLineHeight + gap;
-      const settingsBtnY = resumeBtnY + btnHeight + gap;
+      const shopBtnY = resumeBtnY + btnHeight + gap;
+      const settingsBtnY = shopBtnY + btnHeight + gap;
       const saveBtnY = settingsBtnY + btnHeight + gap;
       const backBtnY = boxY + boxH - btnHeight - margin;
 
       return {
           scale, margin, gap, btnW, btnHeight, btnX,
           boxX, boxY, boxW, boxH,
-          titleY, resumeBtnY, settingsBtnY, saveBtnY, backBtnY
+          titleY, resumeBtnY, shopBtnY, settingsBtnY, saveBtnY, backBtnY
       };
   }
 
@@ -883,11 +969,13 @@ class GameEngine {
         this.drawPauseMain(context, layout);
     } else if (this.menuState === 'SETTINGS') {
         this.drawSettings(context, layout);
+    } else if (this.menuState === 'SHOP') {
+        this.drawShop(context, layout);
     }
   }
 
-  drawPauseMain(context: CanvasRenderingContext2D, layout: any) {
-    const { btnX, btnW, btnHeight, resumeBtnY, settingsBtnY, saveBtnY, titleY, scale, boxY, boxH } = layout;
+  drawPauseMain(context: CanvasRenderingContext2D, layout: MenuLayout) {
+    const { btnX, btnW, btnHeight, resumeBtnY, shopBtnY, settingsBtnY, saveBtnY, titleY, scale, boxY, boxH } = layout;
     const titleText = "PAUSED";
 
     // Title
@@ -936,6 +1024,7 @@ class GameEngine {
     };
 
     drawButton("RESUME", resumeBtnY, 'resume', '#4caf50', '#2e7d32');
+    drawButton("SHOP", shopBtnY, 'shop', '#9c27b0', '#7b1fa2');
     drawButton("SETTINGS", settingsBtnY, 'settings', '#ff9800', '#f57c00');
     drawButton("SAVE GAME", saveBtnY, 'save', '#2196f3', '#1565c0');
 
@@ -965,7 +1054,7 @@ class GameEngine {
     context.textBaseline = 'alphabetic';
   }
 
-  drawSettings(context: CanvasRenderingContext2D, layout: any) {
+  drawSettings(context: CanvasRenderingContext2D, layout: MenuLayout) {
     const { btnX, btnW, btnHeight, backBtnY, titleY, scale, boxY, margin, gap } = layout;
     const titleText = "SETTINGS";
     const titleLineHeight = 60 * scale;
@@ -1094,6 +1183,195 @@ class GameEngine {
     context.textBaseline = 'alphabetic';
   }
 
+  getShopPrices() {
+      return {
+          damage: Math.floor(100 * Math.pow(1.5, this.upgrades.damage - 1)),
+          gravity: Math.floor(50 * Math.pow(1.4, this.upgrades.gravity - 1)),
+          efficiency: Math.floor(200 * Math.pow(1.6, this.upgrades.efficiency - 1))
+      };
+  }
+
+  buyUpgrade(type: 'damage' | 'gravity' | 'efficiency') {
+      const prices = this.getShopPrices();
+      const cost = prices[type];
+      
+      if (this.money >= cost) {
+          this.money -= cost;
+          this.upgrades[type]++;
+          
+          // Apply Upgrade Effects Immediately
+          if (type === 'damage') {
+              this.ball.damage = this.upgrades.damage; // Simple linear scaling
+          } else if (type === 'gravity') {
+              // Re-apply gravity scaling
+              // We need current base radius. 
+              // We can infer it from ball.radius / 0.3 (since ball radius is 30% of hex radius)
+              // Or better, use rowHeight: radius = rowHeight / 1.5
+              const radius = this.rowHeight / 1.5;
+              const gravityMult = 1 + (this.upgrades.gravity - 1) * 0.1;
+              this.ball.gravity = radius * 0.02 * gravityMult;
+          }
+          
+          this.showNotification(`Upgraded ${type}!`);
+          this.saveGame(); // Auto-save on purchase
+      } else {
+          this.showNotification("Not enough money!");
+      }
+  }
+
+  drawShop(context: CanvasRenderingContext2D, layout: MenuLayout) {
+    const { btnX, btnW, btnHeight, backBtnY, titleY, scale, boxY, boxH, margin, gap } = layout;
+    const titleText = "SHOP";
+    
+    // Title
+    context.textAlign = 'center';
+    context.textBaseline = 'middle';
+    context.shadowColor = 'rgba(0, 0, 0, 0.8)';
+    context.shadowBlur = 8 * scale; 
+    context.shadowOffsetX = 3 * scale; 
+    context.shadowOffsetY = 3 * scale; 
+    
+    context.font = `${48 * scale}px "Fredoka One", cursive`;
+    context.strokeStyle = '#1A1A1A'; 
+    context.lineWidth = 2 * scale;   
+    context.strokeText(titleText, this.canvasWidth / 2, titleY); 
+    context.fillStyle = 'white'; 
+    context.fillText(titleText, this.canvasWidth / 2, titleY); 
+
+    context.shadowBlur = 0; 
+    context.shadowOffsetX = 0;
+    context.shadowOffsetY = 0;
+
+    // Money Display (Top Right of Box)
+    context.font = `${24 * scale}px "Fredoka One", cursive`;
+    context.textAlign = 'right';
+    context.fillStyle = '#FFD700'; // Gold
+    context.fillText(`$${this.money}`, btnX + btnW, titleY);
+
+    // --- Upgrades List ---
+    const startY = boxY + margin + (60 * scale) + gap; 
+    const itemHeight = 75 * scale;
+    const gapSmall = 15 * scale;
+    const prices = this.getShopPrices();
+
+    const drawShopItem = (name: string, type: 'damage' | 'gravity' | 'efficiency', index: number) => {
+        const yBase = startY + (index * (itemHeight + gapSmall));
+        const btnId = `buy_${type}`;
+        
+        // Offset for entire row
+        const offset = (this.activeButton === btnId) ? 2 * scale : 0;
+        const y = yBase + offset;
+
+        // Item Box Background
+        context.fillStyle = 'rgba(255, 255, 255, 0.1)';
+        context.beginPath();
+        context.roundRect(btnX, y, btnW, itemHeight, 5 * scale);
+        context.fill();
+
+        // Debug: Visual Feedback for Active State
+        if (this.activeButton === btnId) {
+            context.strokeStyle = 'yellow';
+            context.lineWidth = 4 * scale;
+            context.stroke();
+        }
+
+        // Info Text (Left)
+        context.textAlign = 'left';
+        context.textBaseline = 'top';
+        
+        const level = this.upgrades[type];
+        const cost = prices[type];
+        const canAfford = this.money >= cost;
+
+        // Name & Lvl
+        context.fillStyle = 'white';
+        context.font = `${22 * scale}px "Fredoka One", cursive`;
+        context.fillText(`${name} (Lvl ${level})`, btnX + 10 * scale, y + 10 * scale);
+
+        // Description/Effect (Smaller)
+        context.fillStyle = '#aaa';
+        context.font = `${16 * scale}px "Fredoka One", cursive`;
+        let effect = "";
+        if (type === 'damage') effect = `Damage: ${level}`;
+        if (type === 'gravity') effect = `Speed: +${Math.round((level-1)*10)}%`;
+        if (type === 'efficiency') effect = `Value: +${Math.round((level-1)*20)}%`;
+        context.fillText(effect, btnX + 10 * scale, y + 40 * scale);
+
+        // Buy Button (Right)
+        const buyBtnW = 100 * scale;
+        const buyBtnH = 40 * scale;
+        const buyBtnX = btnX + btnW - buyBtnW - 10 * scale;
+        const buyBtnY = y + (itemHeight - buyBtnH) / 2;
+        
+        // Shadow (drawn at non-offset position + shadow depth, but relative to y which is already offset)
+        // Wait, if we move the whole row, the shadow should stay? 
+        // Or we treat the whole row as a button?
+        // Let's just animate the face.
+        
+        // Actually, let's keep it simple. The row moves.
+        // Buy Button Face
+        context.fillStyle = canAfford ? '#4caf50' : '#555';
+        context.beginPath();
+        context.roundRect(buyBtnX, buyBtnY, buyBtnW, buyBtnH, 5 * scale);
+        context.fill();
+
+        // Price Text
+        context.textAlign = 'center';
+        context.textBaseline = 'middle';
+        context.fillStyle = canAfford ? 'white' : '#888';
+        context.font = `${18 * scale}px "Fredoka One", cursive`;
+        context.fillText(`${cost}`, buyBtnX + buyBtnW / 2, buyBtnY + buyBtnH / 2);
+    };
+
+    drawShopItem("Drill Bit", 'damage', 0);
+    drawShopItem("Engine", 'gravity', 1);
+    drawShopItem("Scanner", 'efficiency', 2);
+
+    // Back Button (Bottom)
+    const offset = (this.activeButton === 'back') ? 3 * scale : 0; 
+
+    context.fillStyle = '#d32f2f';
+    context.beginPath();
+    context.roundRect(btnX, backBtnY + (5 * scale), btnW, btnHeight, 5 * scale); 
+    context.fill();
+
+    context.fillStyle = '#f44336';
+    context.beginPath();
+    context.roundRect(btnX, backBtnY + offset, btnW, btnHeight, 5 * scale); 
+    context.fill();
+    
+    context.fillStyle = 'white';
+    context.font = `${30 * scale}px "Fredoka One", cursive`;
+    context.shadowColor = 'rgba(0,0,0,0.5)';
+    context.shadowBlur = 2 * scale;
+    context.textBaseline = 'middle';
+    context.fillText("BACK", this.canvasWidth / 2, backBtnY + (btnHeight / 2) + offset); 
+    context.shadowBlur = 0;
+    
+    // Notification Text
+    if (this.notificationTimer > 0) {
+        context.save();
+        const alpha = Math.min(1, this.notificationTimer / 500); 
+        context.globalAlpha = alpha;
+        
+        context.fillStyle = '#4caf50'; 
+        context.font = `${20 * scale}px "Fredoka One", cursive`;
+        context.textAlign = 'center';
+        context.textBaseline = 'middle';
+        
+        // Positioned below the Back button
+        const bottomSpaceStart = backBtnY + btnHeight;
+        const bottomSpaceEnd = boxY + boxH;
+        const notifY = (bottomSpaceStart + bottomSpaceEnd) / 2;
+
+        context.fillText(this.notificationText, this.canvasWidth / 2, notifY);
+        
+        context.restore();
+    }
+
+    context.textBaseline = 'alphabetic';
+  }
+
   togglePause() {
       if (this.gameState === 'PLAYING') {
           this.gameState = 'PAUSED';
@@ -1158,124 +1436,197 @@ class GameEngine {
         } else {
             if (type === 'mouseup') this.activeButton = null;
         }
-            } else if (this.gameState === 'PAUSED') {
-                const layout = this.getPauseMenuLayout();
-                const { btnX, btnW, btnHeight, resumeBtnY, settingsBtnY, saveBtnY, backBtnY, scale, boxY, margin, gap } = layout;
-        
-                if (this.menuState === 'MAIN') {
-                    // Check Resume
-                    const insideResume = x >= btnX && x <= btnX + btnW && y >= resumeBtnY && y <= resumeBtnY + btnHeight + (5 * scale);
-                    // Check Settings
-                    const insideSettings = x >= btnX && x <= btnX + btnW && y >= settingsBtnY && y <= settingsBtnY + btnHeight + (5 * scale);
-                    // Check Save
-                    const insideSave = x >= btnX && x <= btnX + btnW && y >= saveBtnY && y <= saveBtnY + btnHeight + (5 * scale);
-        
-                    if (insideResume) {
-                        if (type === 'mousemove') this.isHoveringButton = true;
-                        if (type === 'mousedown') {
-                            this.activeButton = 'resume';
-                        } else if (type === 'mouseup' && this.activeButton === 'resume') {
-                            this.togglePause();
-                            this.activeButton = null;
-                        }
-                    }
-                    else if (insideSettings) {
-                        if (type === 'mousemove') this.isHoveringButton = true;
-                        if (type === 'mousedown') {
-                            this.activeButton = 'settings';
-                        } else if (type === 'mouseup' && this.activeButton === 'settings') {
-                            this.menuState = 'SETTINGS';
-                            this.activeButton = null;
-                        }
-                    } 
-                    else if (insideSave) {
-                        if (type === 'mousemove') this.isHoveringButton = true;
-                        if (type === 'mousedown') {
-                            this.activeButton = 'save';
-                        } else if (type === 'mouseup' && this.activeButton === 'save') {
-                            this.saveGame();
-                            this.activeButton = null;
-                        }
-                    }
-                    else {
-                        if (type === 'mouseup') this.activeButton = null;
-                    }
-                } else if (this.menuState === 'SETTINGS') {
-                    const startY = boxY + margin + (60 * scale) + gap; // Matches drawSettings titleLineHeight
-                    const btnHeightSmall = 45 * scale;
-                    const gapSmall = 15 * scale;
+    } else if (this.gameState === 'PAUSED') {
+        const layout = this.getPauseMenuLayout();
+        const { btnX, btnW, btnHeight, resumeBtnY, shopBtnY, settingsBtnY, saveBtnY, backBtnY, scale, boxY, margin, gap } = layout;
 
-                    // 1. Volume Interaction
-                    const volLabelY = startY + 20 * scale;
-                    const sliderX = btnX + 105 * scale;
-                    const sliderW = btnW - 105 * scale;
-                    const sliderH = 24 * scale; // Slightly larger hitbox height
-                    const sliderY = volLabelY - sliderH / 2;
-                    
-                    if ((type === 'mousedown' || (type === 'mousemove' && this.isResizing)) && 
-                        x >= sliderX - 10 && x <= sliderX + sliderW + 10 && 
-                        y >= sliderY - 10 && y <= sliderY + sliderH + 10) {
-                        
-                        this.isResizing = true; // Hijacking resize flag for drag interaction
-                        let vol = (x - sliderX) / sliderW;
-                        if (vol < 0) vol = 0;
-                        if (vol > 1) vol = 1;
-                        this.settings.volume = vol;
-                        SoundManager.volume = vol;
-                        if (type === 'mousedown') this.activeButton = 'volume';
-                    }
-                    if (type === 'mouseup') this.isResizing = false;
+        if (this.menuState === 'MAIN') {
+            // Check Resume
+            const insideResume = x >= btnX && x <= btnX + btnW && y >= resumeBtnY && y <= resumeBtnY + btnHeight + (5 * scale);
+            // Check Shop
+            const insideShop = x >= btnX && x <= btnX + btnW && y >= shopBtnY && y <= shopBtnY + btnHeight + (5 * scale);
+            // Check Settings
+            const insideSettings = x >= btnX && x <= btnX + btnW && y >= settingsBtnY && y <= settingsBtnY + btnHeight + (5 * scale);
+            // Check Save
+            const insideSave = x >= btnX && x <= btnX + btnW && y >= saveBtnY && y <= saveBtnY + btnHeight + (5 * scale);
 
-                    // 2. Toggles
-                    const hpY = startY + 40 * scale + gapSmall;
-                    const insideHp = x >= btnX && x <= btnX + btnW && y >= hpY && y <= hpY + btnHeightSmall + (5 * scale);
-                    
-                    const blocksY = hpY + btnHeightSmall + gapSmall;
-                    const insideBlocks = x >= btnX && x <= btnX + btnW && y >= blocksY && y <= blocksY + btnHeightSmall + (5 * scale);
+            if (insideResume) {
+                if (type === 'mousemove') this.isHoveringButton = true;
+                if (type === 'mousedown') {
+                    this.activeButton = 'resume';
+                } else if (type === 'mouseup' && this.activeButton === 'resume') {
+                    this.togglePause();
+                    this.activeButton = null;
+                }
+            }
+            else if (insideShop) {
+                if (type === 'mousemove') this.isHoveringButton = true;
+                if (type === 'mousedown') {
+                    this.activeButton = 'shop';
+                } else if (type === 'mouseup' && this.activeButton === 'shop') {
+                    this.menuState = 'SHOP';
+                    this.activeButton = null;
+                }
+            }
+            else if (insideSettings) {
+                if (type === 'mousemove') this.isHoveringButton = true;
+                if (type === 'mousedown') {
+                    this.activeButton = 'settings';
+                } else if (type === 'mouseup' && this.activeButton === 'settings') {
+                    this.menuState = 'SETTINGS';
+                    this.activeButton = null;
+                }
+            } 
+            else if (insideSave) {
+                if (type === 'mousemove') this.isHoveringButton = true;
+                if (type === 'mousedown') {
+                    this.activeButton = 'save';
+                } else if (type === 'mouseup' && this.activeButton === 'save') {
+                    this.saveGame();
+                    this.activeButton = null;
+                }
+            }
+            else {
+                if (type === 'mouseup') this.activeButton = null;
+            }
+        } else if (this.menuState === 'SETTINGS') {
+             const startY = boxY + margin + (60 * scale) + gap; 
+             const btnHeightSmall = 45 * scale;
+             const gapSmall = 15 * scale;
 
-                    const bounceY = blocksY + btnHeightSmall + gapSmall;
-                    const insideBounce = x >= btnX && x <= btnX + btnW && y >= bounceY && y <= bounceY + btnHeightSmall + (5 * scale);
+             const volLabelY = startY + 20 * scale;
+             const sliderX = btnX + 105 * scale;
+             const sliderW = btnW - 105 * scale;
+             const sliderH = 24 * scale; 
+             const sliderY = volLabelY - sliderH / 2;
+             
+             if ((type === 'mousedown' || (type === 'mousemove' && this.isResizing)) && 
+                 x >= sliderX - 10 && x <= sliderX + sliderW + 10 && 
+                 y >= sliderY - 10 && y <= sliderY + sliderH + 10) {
+                 
+                 this.isResizing = true; 
+                 let vol = (x - sliderX) / sliderW;
+                 if (vol < 0) vol = 0;
+                 if (vol > 1) vol = 1;
+                 this.settings.volume = vol;
+                 SoundManager.volume = vol;
+                 if (type === 'mousedown') this.activeButton = 'volume';
+             }
+             if (type === 'mouseup') this.isResizing = false;
 
-                    if (insideHp) {
-                        if (type === 'mousemove') this.isHoveringButton = true;
-                        if (type === 'mousedown') this.activeButton = 'toggle_hp';
-                        else if (type === 'mouseup' && this.activeButton === 'toggle_hp') {
-                            this.settings.showHp = !this.settings.showHp;
-                            this.activeButton = null;
-                        }
-                    } else if (insideBlocks) {
-                        if (type === 'mousemove') this.isHoveringButton = true;
-                        if (type === 'mousedown') this.activeButton = 'toggle_blocks';
-                        else if (type === 'mouseup' && this.activeButton === 'toggle_blocks') {
-                            this.settings.sfxBlocks = !this.settings.sfxBlocks;
-                            SoundManager.muteBlocks = !this.settings.sfxBlocks;
-                            this.activeButton = null;
-                        }
-                    } else if (insideBounce) {
-                        if (type === 'mousemove') this.isHoveringButton = true;
-                        if (type === 'mousedown') this.activeButton = 'toggle_bounce';
-                        else if (type === 'mouseup' && this.activeButton === 'toggle_bounce') {
-                            this.settings.sfxBounce = !this.settings.sfxBounce;
-                            SoundManager.muteBounce = !this.settings.sfxBounce;
-                            this.activeButton = null;
-                        }
-                    }
+             const hpY = startY + 40 * scale + gapSmall;
+             const insideHp = x >= btnX && x <= btnX + btnW && y >= hpY && y <= hpY + btnHeightSmall + (5 * scale);
+             
+             const blocksY = hpY + btnHeightSmall + gapSmall;
+             const insideBlocks = x >= btnX && x <= btnX + btnW && y >= blocksY && y <= blocksY + btnHeightSmall + (5 * scale);
 
-                    // Back Button
-                    const insideBack = x >= btnX && x <= btnX + btnW && y >= backBtnY && y <= backBtnY + btnHeight + (5 * scale);
-                    if (insideBack) {
-                        if (type === 'mousemove') this.isHoveringButton = true;
-                        if (type === 'mousedown') {
-                            this.activeButton = 'back';
-                        } else if (type === 'mouseup' && this.activeButton === 'back') {
-                            this.menuState = 'MAIN';
-                            this.activeButton = null;
-                        }
+             const bounceY = blocksY + btnHeightSmall + gapSmall;
+             const insideBounce = x >= btnX && x <= btnX + btnW && y >= bounceY && y <= bounceY + btnHeightSmall + (5 * scale);
+
+             if (insideHp) {
+                 if (type === 'mousemove') this.isHoveringButton = true;
+                 if (type === 'mousedown') this.activeButton = 'toggle_hp';
+                 else if (type === 'mouseup' && this.activeButton === 'toggle_hp') {
+                     this.settings.showHp = !this.settings.showHp;
+                     this.activeButton = null;
+                 }
+             } else if (insideBlocks) {
+                 if (type === 'mousemove') this.isHoveringButton = true;
+                 if (type === 'mousedown') this.activeButton = 'toggle_blocks';
+                 else if (type === 'mouseup' && this.activeButton === 'toggle_blocks') {
+                     this.settings.sfxBlocks = !this.settings.sfxBlocks;
+                     SoundManager.muteBlocks = !this.settings.sfxBlocks;
+                     this.activeButton = null;
+                 }
+             } else if (insideBounce) {
+                 if (type === 'mousemove') this.isHoveringButton = true;
+                 if (type === 'mousedown') this.activeButton = 'toggle_bounce';
+                 else if (type === 'mouseup' && this.activeButton === 'toggle_bounce') {
+                     this.settings.sfxBounce = !this.settings.sfxBounce;
+                     SoundManager.muteBounce = !this.settings.sfxBounce;
+                     this.activeButton = null;
+                 }
+             }
+
+             const insideBack = x >= btnX && x <= btnX + btnW && y >= backBtnY && y <= backBtnY + btnHeight + (5 * scale);
+             if (insideBack) {
+                 if (type === 'mousemove') this.isHoveringButton = true;
+                 if (type === 'mousedown') {
+                     this.activeButton = 'back';
+                 } else if (type === 'mouseup' && this.activeButton === 'back') {
+                     this.menuState = 'MAIN';
+                     this.activeButton = null;
+                 }
+             } else {
+                 if (type === 'mouseup' && !this.isResizing) this.activeButton = null;
+             }
+        } else if (this.menuState === 'SHOP') {
+            const startY = boxY + margin + (60 * scale) + gap; 
+            const itemHeight = 75 * scale;
+            const gapSmall = 15 * scale;
+
+            // Back Button (Checked first to ensure it works)
+            const insideBack = x >= btnX && x <= btnX + btnW && y >= backBtnY && y <= backBtnY + btnHeight + (5 * scale);
+            if (insideBack) {
+                if (type === 'mousemove') this.isHoveringButton = true;
+                
+                if (type === 'mousedown') {
+                    this.activeButton = 'back';
+                } else if (type === 'mouseup') {
+                    if (this.activeButton === 'back') {
+                        this.menuState = 'MAIN';
+                        this.activeButton = null;
                     } else {
-                        if (type === 'mouseup' && !this.isResizing) this.activeButton = null;
+                        // Released over back button but started elsewhere -> Clear active state
+                        this.activeButton = null;
                     }
                 }
-            } else if (this.gameState === 'PLAYING') {        // Check for Pause Button click
+                return; // Exit early if back button handled
+            }
+
+            // Math-based hitbox detection
+            const totalItemHeight = itemHeight + gapSmall;
+            if (x >= btnX && x <= btnX + btnW && y >= startY) {
+                 const relativeY = y - startY;
+                 const index = Math.floor(relativeY / totalItemHeight);
+                 const offsetInItem = relativeY % totalItemHeight;
+                 
+                 if (index >= 0 && index <= 2 && offsetInItem <= itemHeight) {
+                     // We are inside an item!
+                     let targetType: 'damage' | 'gravity' | 'efficiency' | null = null;
+                     if (index === 0) targetType = 'damage';
+                     else if (index === 1) targetType = 'gravity';
+                     else if (index === 2) targetType = 'efficiency';
+                     
+                     if (targetType) {
+                         const btnId = `buy_${targetType}`;
+                         if (type === 'mousemove') this.isHoveringButton = true;
+                         if (type === 'mousedown') {
+                             this.activeButton = btnId;
+                         }
+                         // Looser check: Allow buy on mouseup even if activebutton mismatch (simple click)
+                         if (type === 'mouseup') {
+                             try {
+                                 this.buyUpgrade(targetType);
+                                 this.activeButton = null;
+                                 SoundManager.playPop();
+                                 this.showNotification(`Bought ${targetType}`); // Debug success
+                             } catch (e) {
+                                 console.error(e);
+                                 this.showNotification("Error Buying!");
+                                 this.activeButton = null;
+                             }
+                         }
+                     }
+                 } else if (type === 'mouseup') {
+                     this.activeButton = null;
+                 }
+            } else if (type === 'mouseup') {
+                 // Clicked outside list
+                 this.activeButton = null;
+            }
+        }
+    } else if (this.gameState === 'PLAYING') {        // Check for Pause Button click
         const hudMargin = 20 * scale;
         const pauseBtnSize = 60 * scale;
         const pauseBtnX = hudMargin;

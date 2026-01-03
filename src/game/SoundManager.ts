@@ -12,7 +12,7 @@ class SoundManager {
   private getContext(): AudioContext | null {
     if (!this.audioCtx) {
       try {
-        const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+        const AudioContextClass = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
         this.audioCtx = new AudioContextClass();
       } catch (e) {
         console.error("Web Audio API not supported", e);
@@ -48,9 +48,41 @@ class SoundManager {
     const t = ctx.currentTime;
 
     if (type === 'pop') {
-        // --- Crumble Sound (Filtered Noise) ---
-        // Create noise buffer
-        const duration = 0.2;
+        // --- Mouth Pop (Resonant Noise Sweep) ---
+        const bufferSize = ctx.sampleRate * 0.1; // 100ms
+        const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+        const data = buffer.getChannelData(0);
+        for (let i = 0; i < bufferSize; i++) {
+            data[i] = Math.random() * 2 - 1;
+        }
+
+        const noise = ctx.createBufferSource();
+        noise.buffer = buffer;
+
+        // Bandpass filter with high resonance (Q)
+        const filter = ctx.createBiquadFilter();
+        filter.type = 'bandpass';
+        filter.Q.value = 10; // High resonance for "tonal" pop
+        
+        // Sweep frequency down to simulate mouth shape change
+        // Start around 1000Hz (formant) and drop
+        filter.frequency.setValueAtTime(1200, t); 
+        filter.frequency.exponentialRampToValueAtTime(300, t + 0.05);
+
+        const gainNode = ctx.createGain();
+        gainNode.gain.setValueAtTime(0, t);
+        gainNode.gain.linearRampToValueAtTime(this.volume * 1.5, t + 0.002); // Fast attack
+        gainNode.gain.exponentialRampToValueAtTime(0.01, t + 0.08); // Short decay
+
+        noise.connect(filter);
+        filter.connect(gainNode);
+        gainNode.connect(ctx.destination);
+
+        noise.start(t);
+        noise.stop(t + 0.1);
+    } else {
+        // --- Mouse Click Sound (Bounce) ---
+        const duration = 0.02; // 20ms
         const bufferSize = ctx.sampleRate * duration;
         const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
         const data = buffer.getChannelData(0);
@@ -61,48 +93,24 @@ class SoundManager {
         const noise = ctx.createBufferSource();
         noise.buffer = buffer;
 
-        // Lowpass filter for "earthy" texture
         const filter = ctx.createBiquadFilter();
-        filter.type = 'lowpass';
-        filter.frequency.setValueAtTime(800, t); 
-        filter.frequency.exponentialRampToValueAtTime(100, t + duration); // Sweep down
+        filter.type = 'bandpass';
+        filter.frequency.value = 2500; // Focused click frequency
+        filter.Q.value = 1;
 
-        const noiseGain = ctx.createGain();
+        const gainNode = ctx.createGain();
+        const vol = this.volume * 0.1 * Math.min(intensity, 1.5); // Reduced volume
         
-        // Softer attack than a pop, but still quick
-        noiseGain.gain.setValueAtTime(0, t);
-        noiseGain.gain.linearRampToValueAtTime(this.volume * 0.5, t + 0.02);
-        noiseGain.gain.exponentialRampToValueAtTime(0.01, t + duration);
+        gainNode.gain.setValueAtTime(0, t);
+        gainNode.gain.linearRampToValueAtTime(vol, t + 0.002); // Slightly slower attack
+        gainNode.gain.exponentialRampToValueAtTime(0.001, t + duration);
 
         noise.connect(filter);
-        filter.connect(noiseGain);
-        noiseGain.connect(ctx.destination);
+        filter.connect(gainNode);
+        gainNode.connect(ctx.destination);
 
         noise.start(t);
         noise.stop(t + duration);
-    } else {
-        const oscillator = ctx.createOscillator();
-        const gainNode = ctx.createGain();
-
-        oscillator.connect(gainNode);
-        gainNode.connect(ctx.destination);
-
-        // Bounce - "Tick" sound
-        oscillator.type = 'sine';
-        
-        // Higher frequency for a "tick"
-        const baseFreq = freq * 4; // 300 * 4 = 1200Hz
-        oscillator.frequency.setValueAtTime(baseFreq, t);
-        oscillator.frequency.exponentialRampToValueAtTime(baseFreq * 0.5, t + 0.03);
-
-        // Volume scales with intensity (bounce speed)
-        const vol = this.volume * 0.15 * Math.min(intensity, 1.0);
-        
-        gainNode.gain.setValueAtTime(vol, t);
-        gainNode.gain.exponentialRampToValueAtTime(0.01, t + 0.03);
-        
-        oscillator.start(t);
-        oscillator.stop(t + 0.03);
     }
   }
 }

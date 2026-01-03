@@ -7,8 +7,9 @@ class Ball {
   dy: number; // velocity y
   gravity: number;
   elasticity: number; // bounciness
+  damage: number;
 
-  constructor(x: number, y: number, radius: number, color: string, dx: number, dy: number, gravity: number, elasticity: number) {
+  constructor(x: number, y: number, radius: number, color: string, dx: number, dy: number, gravity: number, elasticity: number, damage: number = 1) {
     this.x = x;
     this.y = y;
     this.radius = radius;
@@ -17,6 +18,7 @@ class Ball {
     this.dy = dy;
     this.gravity = gravity;
     this.elasticity = elasticity;
+    this.damage = damage;
   }
 
   update(canvas: HTMLCanvasElement, timeScale: number = 1) {
