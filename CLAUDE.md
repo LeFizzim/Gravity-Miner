@@ -22,7 +22,7 @@ npm run preview      # Preview production build locally
 - `src/App.tsx`, `src/components/GameCanvas.tsx` - React container, canvas setup, input listeners, game loop initialization
 - `src/game/GameEngine.ts` - Core game logic: state management (MENU/PLAYING/PAUSED), upgrades/shop system, physics, collision detection, procedural generation, and all Canvas rendering
 - `src/game/Ball.ts` - Player physics entity with damage/gravity scaling from upgrades
-- `src/game/Block.ts` - Destructible hexagonal grid elements
+- `src/game/Block.ts` - Destructible hexagonal grid elements with special types (normal, bitBooster, explosive)
 - `src/game/SoundManager.ts` - Web Audio API procedural sound synthesis
 
 **Key principle:** React is strictly for the container. All game logic, menus, and HUD are drawn directly to Canvas via `GameEngine.draw()`.
@@ -32,6 +32,7 @@ npm run preview      # Preview production build locally
 - **UI via Canvas:** Menus and HUD are rendered in Canvas, not React components
 - **Settings:** Add new options to `settings` object in `GameEngine.ts`, implement in `drawSettings`/`handleInput`
 - **Input handling:** For lists (Shop), use math-based index calculation over individual hitbox checks
+- **Block Upgrades:** Special block types are rolled via `typeRolled` flag when blocks come near the player; only blocks within the hole area (`holeLeft` to `holeRight`) are eligible
 - **Safety:** Wrap state-heavy operations in try-catch; ensure all rendering variables are defined to avoid crashing the game loop
 - **Performance:** Game loop uses time-delta (`dt`) for frame-rate independent physics
 
