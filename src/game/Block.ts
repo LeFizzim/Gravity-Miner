@@ -8,8 +8,10 @@ class Block {
   color: string;
   row: number;
   col: number;
+  type: 'normal' | 'bitBooster' | 'explosive';
+  typeRolled: boolean; // Whether this block has been checked for special type
 
-  constructor(x: number, y: number, radius: number, hp: number, value: number, color: string, row: number, col: number) {
+  constructor(x: number, y: number, radius: number, hp: number, value: number, color: string, row: number, col: number, type: 'normal' | 'bitBooster' | 'explosive' = 'normal') {
     this.x = x;
     this.y = y;
     this.radius = radius;
@@ -19,6 +21,8 @@ class Block {
     this.color = color;
     this.row = row;
     this.col = col;
+    this.type = type;
+    this.typeRolled = false;
   }
 
   draw(context: CanvasRenderingContext2D, offsetY: number = 0, minX: number = -Infinity, maxX: number = Infinity, showHp: boolean = true) {
@@ -45,6 +49,35 @@ class Block {
     context.strokeStyle = 'rgba(0,0,0,0.1)';
     context.lineWidth = 2;
     context.stroke();
+
+    // Special block glowing outlines
+    if (this.type === 'bitBooster') {
+      // Draw multiple strokes for glow effect
+      context.save();
+      context.lineWidth = 6;
+      context.strokeStyle = 'rgba(255, 165, 0, 0.5)'; // Outer glow
+      context.stroke();
+      context.lineWidth = 4;
+      context.strokeStyle = '#FF8C00'; // Main orange border
+      context.stroke();
+      context.lineWidth = 2;
+      context.strokeStyle = '#FFD700'; // Inner bright line
+      context.stroke();
+      context.restore();
+    } else if (this.type === 'explosive') {
+      // Draw multiple strokes for glow effect
+      context.save();
+      context.lineWidth = 6;
+      context.strokeStyle = 'rgba(255, 0, 0, 0.5)'; // Outer glow
+      context.stroke();
+      context.lineWidth = 4;
+      context.strokeStyle = '#FF0000'; // Main red border
+      context.stroke();
+      context.lineWidth = 2;
+      context.strokeStyle = '#FF6666'; // Inner bright line
+      context.stroke();
+      context.restore();
+    }
 
     // Damage overlay
     const damageRatio = 1 - (this.hp / this.maxHp);
