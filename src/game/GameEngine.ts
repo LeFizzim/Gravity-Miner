@@ -37,19 +37,20 @@ interface SaveData {
         explosiveBlocks: number;
     };
     bitBoosterTimer: number;
+    prestigeCount: number;
     offsetY: number;
     maxRowGenerated: number;
     rowHeight: number;
     canvasWidth: number;
     canvasHeight: number;
-    ball: {
+    balls: Array<{
         x: number;
         y: number;
         dx: number;
         dy: number;
         radius: number;
         damage?: number;
-    };
+    }>;
     blocks: Array<{
         x: number;
         y: number;
@@ -66,7 +67,7 @@ interface SaveData {
 }
 
 class GameEngine {
-  ball: Ball;
+  balls: Ball[]; // Array of balls (starts with 1, increases with prestige)
   blocks: Block[];
   canvasWidth: number;
   canvasHeight: number;
@@ -118,6 +119,10 @@ class GameEngine {
   bitBoosterTimer: number = 0;
   readonly BIT_BOOSTER_DURATION: number = 5000; // 5 seconds
 
+  // Prestige System
+  prestigeCount: number = 0; // Number of prestiges (starts at 0 = 1 ball, 1 = 2 balls, etc.)
+  prestigeButtonHovered: boolean = false; // Track if prestige button is hovered
+
   // Settings
   settings = {
       showHp: true,
@@ -141,20 +146,20 @@ class GameEngine {
     const radius = dx / Math.sqrt(3); // Base radius of block hex
     this.rowHeight = radius * 1.5;
 
-    // Initialize Ball high above centered
+    // Initialize Ball(s) - start with one ball
     const groundY = this.getGroundY();
     const hoverDist = Math.min(this.canvasHeight * 0.3, 250);
-    
-    this.ball = new Ball(
-      width / 2, 
-      groundY - hoverDist,   
+
+    this.balls = [new Ball(
+      width / 2,
+      groundY - hoverDist,
       radius * 0.3,  // Dynamic ball radius (reduced by 50%)
-      '#ff4444', 
-      (Math.random() - 0.5) * 4, 
-      0, 
-      radius * 0.02, // Dynamic Gravity 
-      0.98  
-    );
+      '#ff4444',
+      (Math.random() - 0.5) * 4,
+      0,
+      radius * 0.02, // Dynamic Gravity
+      0.98
+    )];
     
     // Set initial offset to center the view
     this.offsetY = groundY - (this.canvasHeight * 0.75);
@@ -208,19 +213,20 @@ class GameEngine {
           settings: this.settings,
           upgrades: this.upgrades,
           bitBoosterTimer: this.bitBoosterTimer,
+          prestigeCount: this.prestigeCount,
           offsetY: this.offsetY,
           maxRowGenerated: this.maxRowGenerated,
           rowHeight: this.rowHeight,
           canvasWidth: this.canvasWidth,
           canvasHeight: this.canvasHeight,
-          ball: {
-              x: this.ball.x,
-              y: this.ball.y,
-              dx: this.ball.dx,
-              dy: this.ball.dy,
-              radius: this.ball.radius,
-              damage: this.ball.damage
-          },
+          balls: this.balls.map(ball => ({
+              x: ball.x,
+              y: ball.y,
+              dx: ball.dx,
+              dy: ball.dy,
+              radius: ball.radius,
+              damage: ball.damage
+          })),
           blocks: this.blocks.map(b => ({
               x: b.x,
               y: b.y,
@@ -277,14 +283,22 @@ class GameEngine {
                   explosiveBlocks: data.upgrades.explosiveBlocks || 0
               };
 
-              // Apply Gravity Upgrade
+              // Apply Gravity Upgrade to all balls (this runs before balls are loaded)
               const radius = this.rowHeight / 1.5;
               const gravityMult = 1 + (this.upgrades.gravity - 1) * 0.1;
-              this.ball.gravity = radius * 0.02 * gravityMult;
+              // Note: Balls will have gravity applied after they're loaded below
+              const targetGravity = radius * 0.02 * gravityMult;
+              // Apply to existing balls if any
+              for (const ball of this.balls) {
+                  ball.gravity = targetGravity;
+              }
           }
 
           // Load bit booster timer (with backwards compatibility)
           this.bitBoosterTimer = data.bitBoosterTimer || 0;
+
+          // Load prestige count (with backwards compatibility)
+          this.prestigeCount = data.prestigeCount || 0;
 
           // Sync SoundManager
           SoundManager.volume = this.settings.volume;
@@ -294,14 +308,23 @@ class GameEngine {
           this.offsetY = data.offsetY;
           this.maxRowGenerated = data.maxRowGenerated;
           this.rowHeight = data.rowHeight; // Temporarily set to saved value for resize logic
-          
-          // Restore Ball
-          this.ball.x = data.ball.x;
-          this.ball.y = data.ball.y;
-          this.ball.dx = data.ball.dx;
-          this.ball.dy = data.ball.dy;
-          this.ball.radius = data.ball.radius;
-          if (data.ball.damage) this.ball.damage = data.ball.damage;
+
+          // Restore Balls (with backwards compatibility for old single-ball saves)
+          if (data.balls && Array.isArray(data.balls)) {
+              const radius = this.rowHeight / 1.5;
+              this.balls = data.balls.map(b => {
+                  const ball = new Ball(b.x, b.y, b.radius, '#ff4444', b.dx, b.dy, radius * 0.02, 0.98);
+                  if (b.damage) ball.damage = b.damage;
+                  return ball;
+              });
+          } else if ((data as any).ball) {
+              // Backwards compatibility: convert old single ball save
+              const b = (data as any).ball;
+              const radius = this.rowHeight / 1.5;
+              const ball = new Ball(b.x, b.y, b.radius, '#ff4444', b.dx, b.dy, radius * 0.02, 0.98);
+              if (b.damage) ball.damage = b.damage;
+              this.balls = [ball];
+          }
           
           // Restore Blocks (with backwards compatibility for type and typeRolled)
           this.blocks = data.blocks.map(b => {
@@ -357,7 +380,71 @@ class GameEngine {
           return false;
       }
   }
-  
+
+  prestige() {
+      // Increment prestige count (adds one more ball)
+      this.prestigeCount++;
+
+      // Reset money
+      this.money = 0;
+
+      // Reset all upgrades to level 1 (or 0 for block upgrades)
+      this.upgrades = {
+          damage: 1,
+          gravity: 1,
+          efficiency: 1,
+          bitBoosters: 0,
+          explosiveBlocks: 0
+      };
+
+      // Reset bit booster timer
+      this.bitBoosterTimer = 0;
+
+      // Clear all blocks
+      this.blocks = [];
+
+      // Reset generation state
+      this.maxRowGenerated = 0;
+
+      // Reset balls - spawn multiple balls based on prestige count
+      const groundY = this.getGroundY();
+      const hoverDist = Math.min(this.canvasHeight * 0.3, 250);
+      const radius = this.rowHeight / 1.5;
+      const baseGravity = radius * 0.02;
+
+      const numberOfBalls = this.prestigeCount + 1; // 1 ball + prestige count
+      this.balls = [];
+
+      // Spawn balls in a spread pattern
+      for (let i = 0; i < numberOfBalls; i++) {
+          const spreadX = (i - (numberOfBalls - 1) / 2) * (radius * 2); // Spread horizontally
+          const spreadY = Math.random() * 30 - 15; // Small vertical variance
+
+          this.balls.push(new Ball(
+              this.canvasWidth / 2 + spreadX,
+              groundY - hoverDist + spreadY,
+              radius * 0.3,
+              '#ff4444',
+              (Math.random() - 0.5) * 4,
+              0,
+              baseGravity,
+              0.98
+          ));
+      }
+
+      // Reset camera offset
+      this.offsetY = groundY - (this.canvasHeight * 0.75);
+
+      // Generate initial blocks
+      this.generateRows(0, 40);
+
+      // Save the new prestige state
+      this.saveGame();
+
+      // Show notification
+      this.showNotification(`Prestige ${this.prestigeCount}! You now have ${numberOfBalls} ball${numberOfBalls > 1 ? 's' : ''}!`);
+  }
+
   updateGeometry() {
     this.holeWidth = this.canvasWidth / 2; // 50% width
     this.holeLeft = (this.canvasWidth - this.holeWidth) / 2; // Centered
@@ -393,59 +480,70 @@ class GameEngine {
       const newGroundY = this.getGroundY();
       const newStartY = newGroundY + radius + 20;
 
-      // Update Ball radius
-      this.ball.radius = radius * 0.3;
+      // Update all balls' radius
+      for (const ball of this.balls) {
+          ball.radius = radius * 0.3;
+      }
 
       // Safe Reset if in MENU
       if (this.gameState === 'MENU') {
-          this.ball.x = this.canvasWidth / 2;
-          
-          // Position ball relative to ground (hovering above)
-          // Scale hover distance slightly with height but cap it
-          const hoverDist = Math.min(this.canvasHeight * 0.3, 250);
-          this.ball.y = newGroundY - hoverDist; 
-          
-          this.ball.dx = (Math.random() - 0.5) * 4;
-          this.ball.dy = 0;
-          
+          // Reset first ball to center
+          if (this.balls.length > 0) {
+              this.balls[0].x = this.canvasWidth / 2;
+
+              // Position ball relative to ground (hovering above)
+              // Scale hover distance slightly with height but cap it
+              const hoverDist = Math.min(this.canvasHeight * 0.3, 250);
+              this.balls[0].y = newGroundY - hoverDist;
+
+              this.balls[0].dx = (Math.random() - 0.5) * 4;
+              this.balls[0].dy = 0;
+          }
+
           // Position camera so ground is at ~75% of screen height
           // ScreenY = WorldY - OffsetY  =>  OffsetY = WorldY - ScreenY
           this.offsetY = newGroundY - (this.canvasHeight * 0.75);
       } else if (oldRowHeight > 1) {
-          // Vertical
-          const ballRowIndex = (this.ball.y - oldStartY) / oldRowHeight;
-          this.ball.y = newStartY + ballRowIndex * this.rowHeight;
+          // Update all balls
+          for (const ball of this.balls) {
+              // Vertical
+              const ballRowIndex = (ball.y - oldStartY) / oldRowHeight;
+              ball.y = newStartY + ballRowIndex * this.rowHeight;
 
-          // Horizontal (Ball)
-          if (oldHoleWidth > 0) {
-              const ballRelX = this.ball.x - oldHoleLeft;
-              const ratioX = this.holeWidth / oldHoleWidth;
-              this.ball.x = this.holeLeft + ballRelX * ratioX;
-          }
+              // Horizontal (Ball)
+              if (oldHoleWidth > 0) {
+                  const ballRelX = ball.x - oldHoleLeft;
+                  const ratioX = this.holeWidth / oldHoleWidth;
+                  ball.x = this.holeLeft + ballRelX * ratioX;
+              }
 
-          // Scale Velocity based on Radius change
-          if (oldRadius > 0) {
-              const currentSpeed = Math.sqrt(this.ball.dx * this.ball.dx + this.ball.dy * this.ball.dy);
-              const normalizedSpeed = currentSpeed / oldRadius;
-              
-              let newSpeed = normalizedSpeed * radius;
-              
-              const maxSafeSpeed = radius * 1.0;
-              if (newSpeed > maxSafeSpeed) newSpeed = maxSafeSpeed;
+              // Scale Velocity based on Radius change
+              if (oldRadius > 0) {
+                  const currentSpeed = Math.sqrt(ball.dx * ball.dx + ball.dy * ball.dy);
+                  const normalizedSpeed = currentSpeed / oldRadius;
 
-              if (currentSpeed > 0.001) {
-                  this.ball.dx = (this.ball.dx / currentSpeed) * newSpeed;
-                  this.ball.dy = (this.ball.dy / currentSpeed) * newSpeed;
+                  let newSpeed = normalizedSpeed * radius;
+
+                  const maxSafeSpeed = radius * 1.0;
+                  if (newSpeed > maxSafeSpeed) newSpeed = maxSafeSpeed;
+
+                  if (currentSpeed > 0.001) {
+                      ball.dx = (ball.dx / currentSpeed) * newSpeed;
+                      ball.dy = (ball.dy / currentSpeed) * newSpeed;
+                  }
               }
           }
 
-          // Reset camera to follow ball immediately
-          this.offsetY = this.ball.y - this.canvasHeight / 3;
+          // Reset camera to follow deepest ball immediately
+          const deepestBall = this.balls.reduce((deepest, ball) => ball.y > deepest.y ? ball : deepest, this.balls[0]);
+          this.offsetY = deepestBall.y - this.canvasHeight / 3;
       }
       
-      // Always update gravity based on new radius
+      // Always update gravity based on new radius for all balls
       const gravityMult = 1 + (this.upgrades.gravity - 1) * 0.1;
-      this.ball.gravity = radius * 0.02 * gravityMult;
+      for (const ball of this.balls) {
+          ball.gravity = radius * 0.02 * gravityMult;
+      }
 
       // Update existing blocks
       this.blocks.forEach(block => {
@@ -488,14 +586,17 @@ class GameEngine {
             const color = `hsl(${hue}, 60%, 50%)`;
 
             // Determine block type based on upgrade levels
+            // Only roll for special types if block is within the playable hole area
             let blockType: 'normal' | 'bitBooster' | 'explosive' = 'normal';
-            const bitBoosterChance = this.upgrades.bitBoosters * 0.01; // 1% per level
-            const explosiveChance = this.upgrades.explosiveBlocks * 0.01; // 1% per level
-            const roll = Math.random();
-            if (roll < bitBoosterChance) {
-                blockType = 'bitBooster';
-            } else if (roll < bitBoosterChance + explosiveChance) {
-                blockType = 'explosive';
+            if (finalX >= this.holeLeft && finalX <= this.holeRight) {
+                const bitBoosterChance = this.upgrades.bitBoosters * 0.01; // 1% per level
+                const explosiveChance = this.upgrades.explosiveBlocks * 0.01; // 1% per level
+                const roll = Math.random();
+                if (roll < bitBoosterChance) {
+                    blockType = 'bitBooster';
+                } else if (roll < bitBoosterChance + explosiveChance) {
+                    blockType = 'explosive';
+                }
             }
 
             const block = new Block(
@@ -568,12 +669,12 @@ class GameEngine {
             if (this.bitBoosterTimer < 0) this.bitBoosterTimer = 0;
         }
 
-        // Roll existing blocks for special types when they come near the player
+        // Roll existing blocks for special types when they come near any ball
         const bitBoosterChance = this.upgrades.bitBoosters * 0.01;
         const explosiveChance = this.upgrades.explosiveBlocks * 0.01;
 
         if (bitBoosterChance > 0 || explosiveChance > 0) {
-            // Only roll blocks within ~2 screens of the ball
+            // Only roll blocks within ~2 screens of any ball
             const rollDistance = this.canvasHeight * 2;
 
             for (const block of this.blocks) {
@@ -584,9 +685,9 @@ class GameEngine {
                 // Blocks halfway sticking out (center near edge) are still eligible
                 if (block.x < this.holeLeft || block.x > this.holeRight) continue;
 
-                // Only roll blocks that are close to the ball vertically
-                const verticalDist = Math.abs(block.y - this.ball.y);
-                if (verticalDist > rollDistance) continue;
+                // Check if block is close to ANY ball vertically
+                const isNearAnyBall = this.balls.some(ball => Math.abs(block.y - ball.y) <= rollDistance);
+                if (!isNearAnyBall) continue;
 
                 // Roll the dice
                 block.typeRolled = true;
@@ -606,30 +707,34 @@ class GameEngine {
 
     const timeScale = dt / 16.667; // Normalize to 60fps (16.667ms per frame)
 
-    this.ball.update({ width: this.canvasWidth, height: this.canvasHeight } as HTMLCanvasElement, timeScale);
-    
-    // Clamp velocity to prevent physics instability
-    // Limit speed to roughly 80% of a block radius per frame
-    const maxVelocity = (this.rowHeight / 1.5) * 0.8; 
-    if (this.ball.dy > maxVelocity) this.ball.dy = maxVelocity;
-    if (this.ball.dy < -maxVelocity) this.ball.dy = -maxVelocity;
-    if (this.ball.dx > maxVelocity) this.ball.dx = maxVelocity;
-    if (this.ball.dx < -maxVelocity) this.ball.dx = -maxVelocity;
+    // Update all balls
+    for (const ball of this.balls) {
+        ball.update({ width: this.canvasWidth, height: this.canvasHeight } as HTMLCanvasElement, timeScale);
 
-    // Hole Wall Collisions
-    if (this.ball.x - this.ball.radius < this.holeLeft) {
-        this.ball.x = this.holeLeft + this.ball.radius;
-        if (Math.abs(this.ball.dx) > 1) SoundManager.playBounce(Math.abs(this.ball.dx) / 5);
-        this.ball.dx *= -this.ball.elasticity;
-    }
-    if (this.ball.x + this.ball.radius > this.holeRight) {
-        this.ball.x = this.holeRight - this.ball.radius;
-        if (Math.abs(this.ball.dx) > 1) SoundManager.playBounce(Math.abs(this.ball.dx) / 5);
-        this.ball.dx *= -this.ball.elasticity;
+        // Clamp velocity to prevent physics instability
+        // Limit speed to roughly 80% of a block radius per frame
+        const maxVelocity = (this.rowHeight / 1.5) * 0.8;
+        if (ball.dy > maxVelocity) ball.dy = maxVelocity;
+        if (ball.dy < -maxVelocity) ball.dy = -maxVelocity;
+        if (ball.dx > maxVelocity) ball.dx = maxVelocity;
+        if (ball.dx < -maxVelocity) ball.dx = -maxVelocity;
+
+        // Hole Wall Collisions
+        if (ball.x - ball.radius < this.holeLeft) {
+            ball.x = this.holeLeft + ball.radius;
+            if (Math.abs(ball.dx) > 1) SoundManager.playBounce(Math.abs(ball.dx) / 5);
+            ball.dx *= -ball.elasticity;
+        }
+        if (ball.x + ball.radius > this.holeRight) {
+            ball.x = this.holeRight - ball.radius;
+            if (Math.abs(ball.dx) > 1) SoundManager.playBounce(Math.abs(ball.dx) / 5);
+            ball.dx *= -ball.elasticity;
+        }
     }
 
-    // Camera follow
-    const targetY = this.ball.y - this.canvasHeight / 3;
+    // Camera follow deepest ball
+    const deepestBall = this.balls.reduce((deepest, ball) => ball.y > deepest.y ? ball : deepest, this.balls[0]);
+    const targetY = deepestBall.y - this.canvasHeight / 3;
     // Smoothly interpolate camera position towards target (up or down)
     this.offsetY = this.offsetY + (targetY - this.offsetY) * 0.1;
     
@@ -640,30 +745,36 @@ class GameEngine {
         currentDeepestY = 250 + this.maxRowGenerated * this.rowHeight;
     }
 
-    // Check collisions
+    // Check collisions for all balls
     for (let i = this.blocks.length - 1; i >= 0; i--) {
       const block = this.blocks[i];
-      if (Math.abs(block.y - this.ball.y) > 200 || Math.abs(block.x - this.ball.x) > 200) continue;
 
-      if (this.checkCollision(this.ball, block)) {
-        // Calculate effective damage (with bit booster multiplier)
-        const damageMultiplier = this.bitBoosterTimer > 0 ? 2 : 1;
-        const effectiveDamage = this.ball.damage * damageMultiplier;
+      // Check collision with each ball
+      for (const ball of this.balls) {
+        // Skip if ball is too far from block
+        if (Math.abs(block.y - ball.y) > 200 || Math.abs(block.x - ball.x) > 200) continue;
 
-        const destroyed = block.takeDamage(effectiveDamage);
-        if (destroyed) {
-          this.blocks.splice(i, 1);
-          const efficiencyMult = 1 + (this.upgrades.efficiency - 1) * 0.2;
-          this.money += Math.ceil(block.value * efficiencyMult);
-          SoundManager.playPop();
+        if (this.checkCollision(ball, block)) {
+          // Calculate effective damage (with bit booster multiplier)
+          const damageMultiplier = this.bitBoosterTimer > 0 ? 2 : 1;
+          const effectiveDamage = ball.damage * damageMultiplier;
 
-          // Handle special block effects
-          if (block.type === 'bitBooster') {
-            // Refresh timer (no stacking, just reset)
-            this.bitBoosterTimer = this.BIT_BOOSTER_DURATION;
-          } else if (block.type === 'explosive') {
-            // Destroy adjacent blocks
-            this.destroyAdjacentBlocks(block);
+          const destroyed = block.takeDamage(effectiveDamage);
+          if (destroyed) {
+            this.blocks.splice(i, 1);
+            const efficiencyMult = 1 + (this.upgrades.efficiency - 1) * 0.2;
+            this.money += Math.ceil(block.value * efficiencyMult);
+            SoundManager.playPop();
+
+            // Handle special block effects
+            if (block.type === 'bitBooster') {
+              // Refresh timer (no stacking, just reset)
+              this.bitBoosterTimer = this.BIT_BOOSTER_DURATION;
+            } else if (block.type === 'explosive') {
+              // Destroy adjacent blocks
+              this.destroyAdjacentBlocks(block);
+            }
+            break; // Block destroyed, stop checking other balls
           }
         }
       }
@@ -674,13 +785,21 @@ class GameEngine {
     context.save();
     context.translate(0, -this.offsetY);
 
-    this.drawEnvironment(context);
+    this.drawEnvironment(context, this.offsetY);
+
+    // Draw depth markers (in world space, before clipping)
+    if (this.gameState === 'PLAYING') {
+        this.drawDepthMarkers(context);
+    }
 
     // Clip to hole for blocks and ball
     context.save();
     context.beginPath();
-    // Clip rect: Hole area, extended infinitely up and down (in world space)
-    context.rect(this.holeLeft, -100000, this.holeWidth, 200000);
+    // Clip rect: Hole area with dynamic bounds for infinite depth support
+    // Create clip region relative to current camera position
+    const clipTop = this.offsetY - this.canvasHeight;
+    const clipHeight = this.canvasHeight * 3;
+    context.rect(this.holeLeft, clipTop, this.holeWidth, clipHeight);
     context.clip();
 
     this.blocks.forEach(block => {
@@ -688,7 +807,11 @@ class GameEngine {
         // Pass bounds for text hiding
         block.draw(context, 0, this.holeLeft, this.holeRight, this.settings.showHp);
     });
-    this.ball.draw(context);
+
+    // Draw all balls
+    for (const ball of this.balls) {
+        ball.draw(context);
+    }
     
     context.restore(); // Remove clip
     
@@ -722,11 +845,12 @@ class GameEngine {
         context.font = `${20 * scale}px "Fredoka One", cursive`;
         context.textAlign = 'left';
 
-        // Calculate depth based on row index to be scale-invariant
+        // Calculate depth based on row index to be scale-invariant (use deepest ball)
         const radius = this.rowHeight / 1.5;
         const groundY = this.getGroundY();
         const startY = groundY + radius + 20;
-        const depth = Math.max(0, Math.floor((this.ball.y - startY) / this.rowHeight * 2)); // 2m per row
+        const deepestBall = this.balls.reduce((deepest, ball) => ball.y > deepest.y ? ball : deepest, this.balls[0]);
+        const depth = Math.max(0, Math.floor((deepestBall.y - startY) / this.rowHeight * 2)); // 2m per row
 
         context.fillText(`Depth: ${depth}m`, hudX + 20 * scale, hudY + 35 * scale);
         context.fillText(`Money: $${this.money}`, hudX + 20 * scale, hudY + 65 * scale);
@@ -840,25 +964,83 @@ class GameEngine {
 
             context.restore();
         }
+
+        // Draw Prestige Button (Bottom Center)
+        const prestigeBtnW = 180 * scale;
+        const prestigeBtnH = 50 * scale;
+        const prestigeBtnX = (this.canvasWidth - prestigeBtnW) / 2;
+        const prestigeBtnY = this.canvasHeight - prestigeBtnH - hudMargin;
+
+        const canPrestige = depth >= 1000;
+        const offset = (this.activeButton === 'prestige' && canPrestige) ? 3 * scale : 0;
+
+        // Shadow
+        context.fillStyle = canPrestige ? '#7b1fa2' : '#555'; // Purple or grey
+        context.beginPath();
+        context.roundRect(prestigeBtnX, prestigeBtnY + (5 * scale), prestigeBtnW, prestigeBtnH, 5 * scale);
+        context.fill();
+
+        // Face
+        context.fillStyle = canPrestige ? '#9c27b0' : '#777'; // Lighter purple or grey
+        context.beginPath();
+        context.roundRect(prestigeBtnX, prestigeBtnY + offset, prestigeBtnW, prestigeBtnH, 5 * scale);
+        context.fill();
+
+        // Text
+        context.fillStyle = canPrestige ? 'white' : '#999';
+        context.font = `${22 * scale}px "Fredoka One", cursive`;
+        context.textAlign = 'center';
+        context.textBaseline = 'middle';
+        context.shadowColor = 'rgba(0,0,0,0.5)';
+        context.shadowBlur = 2 * scale;
+        context.fillText('PRESTIGE', prestigeBtnX + prestigeBtnW / 2, prestigeBtnY + (prestigeBtnH / 2) + offset);
+        context.shadowBlur = 0;
+
+        // Show tooltip above button if hovered and not available
+        if (this.prestigeButtonHovered && !canPrestige) {
+            context.font = `${16 * scale}px "Fredoka One", cursive`;
+            context.fillStyle = 'white';
+            context.textAlign = 'center';
+            context.textBaseline = 'bottom';
+            context.shadowColor = 'rgba(0, 0, 0, 0.9)';
+            context.shadowBlur = 6 * scale;
+            context.shadowOffsetX = 2 * scale;
+            context.shadowOffsetY = 2 * scale;
+            context.fillText('Reach 1000m to prestige', prestigeBtnX + prestigeBtnW / 2, prestigeBtnY - (10 * scale));
+            context.shadowBlur = 0;
+            context.shadowOffsetX = 0;
+            context.shadowOffsetY = 0;
+        }
+
+        context.textBaseline = 'alphabetic';
     }
   }
 
-  drawEnvironment(context: CanvasRenderingContext2D) {
+  drawEnvironment(context: CanvasRenderingContext2D, offsetY: number) {
     const groundY = this.getGroundY();
     const cornerRadius = 20;
     const borderColor = '#333333'; // Dark grey for borders
     const borderWidth = 2;
-    
+
     // Sky (Full Width)
     context.fillStyle = '#87CEEB';
-    context.fillRect(0, -10000, this.canvasWidth, 10000 + groundY + 100); 
+    context.fillRect(0, -10000, this.canvasWidth, 10000 + groundY + 100);
 
-    // Hole Background (Darker Brown - textured)
+    // Hole Background (Darker Brown - textured) with Parallax Effect
+    // Parallax factor: 0.3 means background moves at 30% speed (more dramatic effect)
+    const parallaxFactor = 0.3;
+    const parallaxAdjustment = offsetY * (1 - parallaxFactor);
+
+    context.save();
+    context.translate(0, parallaxAdjustment); // Apply parallax offset
+
     context.fillStyle = this.dirtPattern || '#4A2C2A'; // Use pattern, fallback to solid dark brown
     context.fillRect(this.holeLeft, groundY, this.holeWidth, 1000000);
     // Overlay a semi-transparent dark color to make it darker than the walls
     context.fillStyle = 'rgba(0, 0, 0, 0.3)'; // Adjust alpha for desired darkness
     context.fillRect(this.holeLeft, groundY, this.holeWidth, 1000000);
+
+    context.restore(); // Remove parallax offset
 
     // Dirt Walls (Straight, no rounding)
     context.fillStyle = this.dirtPattern || '#5d4037'; 
@@ -961,9 +1143,60 @@ class GameEngine {
 
       // Draw Left Wall (Shifted left by width so right edge aligns with holeLeft)
       drawSide(this.holeLeft - wallWidth);
-      
+
       // Draw Right Wall (Left edge aligns with holeRight)
       drawSide(this.holeRight);
+  }
+
+  drawDepthMarkers(context: CanvasRenderingContext2D) {
+      const scale = Math.min(this.canvasWidth, this.canvasHeight) / 1000;
+
+      // Calculate depth parameters (same as HUD depth calculation)
+      const radius = this.rowHeight / 1.5;
+      const groundY = this.getGroundY();
+      const startY = groundY + radius + 20;
+
+      // Screen bounds in world space
+      const screenTop = this.offsetY;
+      const screenBottom = this.offsetY + this.canvasHeight;
+
+      // Draw markers every 50m, starting at 50m
+      const markerInterval = 50; // meters
+
+      // Calculate which markers are visible
+      // depth (in meters) = (y - startY) / rowHeight * 2
+      // So y = startY + (depth / 2) * rowHeight
+
+      const minVisibleDepth = Math.max(0, Math.floor((screenTop - startY) / this.rowHeight * 2 / markerInterval)) * markerInterval;
+      const maxVisibleDepth = Math.ceil((screenBottom - startY) / this.rowHeight * 2 / markerInterval) * markerInterval;
+
+      context.fillStyle = 'white';
+      context.font = `${24 * scale}px "Fredoka One", cursive`;
+      context.textAlign = 'right';
+      context.textBaseline = 'middle';
+
+      // Add subtle shadow for readability
+      context.shadowColor = 'rgba(0, 0, 0, 0.8)';
+      context.shadowBlur = 4 * scale;
+      context.shadowOffsetX = 2 * scale;
+      context.shadowOffsetY = 2 * scale;
+
+      for (let depth = minVisibleDepth; depth <= maxVisibleDepth + markerInterval; depth += markerInterval) {
+          if (depth < markerInterval) continue; // Start at 50m
+
+          // Calculate Y position in world space
+          const markerY = startY + (depth / 2) * this.rowHeight;
+
+          // Position to the left of the hole, on the dirt wall
+          const markerX = this.holeLeft - 10 * scale;
+
+          context.fillText(`${depth}m`, markerX, markerY);
+      }
+
+      // Reset shadow
+      context.shadowBlur = 0;
+      context.shadowOffsetX = 0;
+      context.shadowOffsetY = 0;
   }
 
   drawTitleScreen(context: CanvasRenderingContext2D) {
@@ -1381,13 +1614,17 @@ class GameEngine {
           this.money -= cost;
           this.upgrades[type]++;
 
-          // Apply Upgrade Effects Immediately
+          // Apply Upgrade Effects Immediately to all balls
           if (type === 'damage') {
-              this.ball.damage = this.upgrades.damage; // Simple linear scaling
+              for (const ball of this.balls) {
+                  ball.damage = this.upgrades.damage; // Simple linear scaling
+              }
           } else if (type === 'gravity') {
               const radius = this.rowHeight / 1.5;
               const gravityMult = 1 + (this.upgrades.gravity - 1) * 0.1;
-              this.ball.gravity = radius * 0.02 * gravityMult;
+              for (const ball of this.balls) {
+                  ball.gravity = radius * 0.02 * gravityMult;
+              }
           }
           // bitBoosters and explosiveBlocks take effect in generateRows()
 
@@ -1633,6 +1870,7 @@ class GameEngine {
     // Reset hover state by default (will be set to true if inside a button)
     if (type === 'mousemove') {
         this.isHoveringButton = false;
+        this.prestigeButtonHovered = false;
     }
 
     if (this.gameState === 'MENU') {
@@ -1667,11 +1905,13 @@ class GameEngine {
                 
                 if (!loaded) {
                     this.gameState = 'PLAYING';
-                    
+
                     // Scale initial velocity by radius to keep gameplay consistent across sizes
-                    const radius = this.rowHeight / 1.5; 
-                    this.ball.dx = (Math.random() - 0.5) * (radius * 0.15); // Scaled horizontal speed
-                    this.ball.dy = radius * 0.4; // Stronger vertical speed (0.4)
+                    const radius = this.rowHeight / 1.5;
+                    for (const ball of this.balls) {
+                        ball.dx = (Math.random() - 0.5) * (radius * 0.15); // Scaled horizontal speed
+                        ball.dy = radius * 0.4; // Stronger vertical speed (0.4)
+                    }
                 } else {
                     this.gameState = 'PLAYING';
                 }
@@ -1866,8 +2106,16 @@ class GameEngine {
             for (const item of items) {
                 if (y >= item.y && y <= item.y + itemHeight && x >= btnX && x <= btnX + btnW) {
                     const btnId = `buy_${item.type}`;
+                    const prices = this.getShopPrices();
+                    const cost = prices[item.type];
+                    const canAfford = this.money >= cost;
+
+                    // Check for max level on block upgrades
+                    const isMaxed = (item.type === 'bitBoosters' || item.type === 'explosiveBlocks') && this.upgrades[item.type] >= 10;
+
                     if (type === 'mousemove') this.isHoveringButton = true;
-                    if (type === 'mousedown') this.activeButton = btnId;
+                    // Only set active button if player can afford it and it's not maxed
+                    if (type === 'mousedown' && canAfford && !isMaxed) this.activeButton = btnId;
                     if (type === 'mouseup') {
                         try {
                             this.buyUpgrade(item.type);
@@ -1941,6 +2189,36 @@ class GameEngine {
                 this.activeButton = 'save_icon';
             } else if (type === 'mouseup' && this.activeButton === 'save_icon') {
                 this.saveGame();
+                this.activeButton = null;
+            }
+            return;
+        }
+
+        // Check for Prestige Button click (Bottom Center)
+        const prestigeBtnW = 180 * scale;
+        const prestigeBtnH = 50 * scale;
+        const prestigeBtnX = (this.canvasWidth - prestigeBtnW) / 2;
+        const prestigeBtnY = this.canvasHeight - prestigeBtnH - hudMargin;
+
+        // Calculate depth to check if prestige is available (use deepest ball)
+        const radius = this.rowHeight / 1.5;
+        const groundY = this.getGroundY();
+        const startY = groundY + radius + 20;
+        const deepestBall = this.balls.reduce((deepest, ball) => ball.y > deepest.y ? ball : deepest, this.balls[0]);
+        const depth = Math.max(0, Math.floor((deepestBall.y - startY) / this.rowHeight * 2));
+        const canPrestige = depth >= 1000;
+
+        const insidePrestige = x >= prestigeBtnX && x <= prestigeBtnX + prestigeBtnW && y >= prestigeBtnY && y <= prestigeBtnY + prestigeBtnH + (5 * scale);
+
+        if (insidePrestige) {
+            if (type === 'mousemove') {
+                this.isHoveringButton = true;
+                this.prestigeButtonHovered = true;
+            }
+            if (type === 'mousedown' && canPrestige) {
+                this.activeButton = 'prestige';
+            } else if (type === 'mouseup' && this.activeButton === 'prestige' && canPrestige) {
+                this.prestige();
                 this.activeButton = null;
             }
             return;
