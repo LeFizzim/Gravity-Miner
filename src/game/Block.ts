@@ -8,10 +8,10 @@ class Block {
   color: string;
   row: number;
   col: number;
-  type: 'normal' | 'bitBooster' | 'explosive';
+  type: 'normal' | 'bitBooster' | 'explosive' | 'cashBooster';
   typeRolled: boolean; // Whether this block has been checked for special type
 
-  constructor(x: number, y: number, radius: number, hp: number, value: number, color: string, row: number, col: number, type: 'normal' | 'bitBooster' | 'explosive' = 'normal') {
+  constructor(x: number, y: number, radius: number, hp: number, value: number, color: string, row: number, col: number, type: 'normal' | 'bitBooster' | 'explosive' | 'cashBooster' = 'normal') {
     this.x = x;
     this.y = y;
     this.radius = radius;
@@ -75,6 +75,19 @@ class Block {
       context.stroke();
       context.lineWidth = 2;
       context.strokeStyle = '#FF6666'; // Inner bright line
+      context.stroke();
+      context.restore();
+    } else if (this.type === 'cashBooster') {
+      // Draw multiple strokes for glow effect
+      context.save();
+      context.lineWidth = 6;
+      context.strokeStyle = 'rgba(0, 255, 0, 0.5)'; // Outer glow
+      context.stroke();
+      context.lineWidth = 4;
+      context.strokeStyle = '#00CC00'; // Main green border
+      context.stroke();
+      context.lineWidth = 2;
+      context.strokeStyle = '#66FF66'; // Inner bright line
       context.stroke();
       context.restore();
     }

@@ -35,14 +35,17 @@ interface SaveData {
         efficiency: number;
         bitBoosters: number;
         explosiveBlocks: number;
+        cashBoosters: number;
     };
     bitBoosterTimer: number;
+    cashBoosterTimer?: number;
     prestigeCount: number;
     offsetY: number;
     maxRowGenerated: number;
     rowHeight: number;
     canvasWidth: number;
     canvasHeight: number;
+    lastActiveTime?: number; // Timestamp when game was last active
     balls: Array<{
         x: number;
         y: number;
@@ -61,7 +64,7 @@ interface SaveData {
         value: number;
         color: string;
         radius: number;
-        type: 'normal' | 'bitBooster' | 'explosive';
+        type: 'normal' | 'bitBooster' | 'explosive' | 'cashBooster';
         typeRolled?: boolean;
     }>;
 }
@@ -86,7 +89,8 @@ class GameEngine {
       gravity: 1,
       efficiency: 1,
       bitBoosters: 0,      // 0-10 levels (0 = locked)
-      explosiveBlocks: 0   // 0-10 levels (0 = locked)
+      explosiveBlocks: 0,  // 0-10 levels (0 = locked)
+      cashBoosters: 0      // 0-10 levels (0 = locked)
   };
 
   // Camera/Scroll offset
@@ -119,9 +123,16 @@ class GameEngine {
   bitBoosterTimer: number = 0;
   readonly BIT_BOOSTER_DURATION: number = 5000; // 5 seconds
 
+  // Cash Booster Effect State
+  cashBoosterTimer: number = 0;
+  readonly CASH_BOOSTER_DURATION: number = 5000; // 5 seconds
+
   // Prestige System
   prestigeCount: number = 0; // Number of prestiges (starts at 0 = 1 ball, 1 = 2 balls, etc.)
   prestigeButtonHovered: boolean = false; // Track if prestige button is hovered
+
+  // Offline Progress
+  lastActiveTime: number = Date.now(); // Timestamp when game was last active
 
   // Settings
   settings = {
@@ -207,18 +218,20 @@ class GameEngine {
       this.dirtPattern = ctx.createPattern(pCanvas, 'repeat');
   }
 
-  saveGame() {
+  saveGame(showNotification: boolean = false) {
       const data = {
           money: this.money,
           settings: this.settings,
           upgrades: this.upgrades,
           bitBoosterTimer: this.bitBoosterTimer,
+          cashBoosterTimer: this.cashBoosterTimer,
           prestigeCount: this.prestigeCount,
           offsetY: this.offsetY,
           maxRowGenerated: this.maxRowGenerated,
           rowHeight: this.rowHeight,
           canvasWidth: this.canvasWidth,
           canvasHeight: this.canvasHeight,
+          lastActiveTime: Date.now(),
           balls: this.balls.map(ball => ({
               x: ball.x,
               y: ball.y,
@@ -241,17 +254,21 @@ class GameEngine {
               typeRolled: b.typeRolled
           }))
       };
-      
+
       try {
           // Encode to Base64 to obfuscate
           const json = JSON.stringify(data);
           const encoded = btoa(json);
           localStorage.setItem(this.SAVE_KEY, encoded);
           console.log("Game Saved!");
-          this.showNotification("Game Saved!");
+          if (showNotification) {
+              this.showNotification("Game Saved!");
+          }
       } catch (e) {
           console.error("Failed to save game:", e);
-          this.showNotification("Save Failed!");
+          if (showNotification) {
+              this.showNotification("Save Failed!");
+          }
       }
   }
 
@@ -280,7 +297,8 @@ class GameEngine {
                   gravity: data.upgrades.gravity || 1,
                   efficiency: data.upgrades.efficiency || 1,
                   bitBoosters: data.upgrades.bitBoosters || 0,
-                  explosiveBlocks: data.upgrades.explosiveBlocks || 0
+                  explosiveBlocks: data.upgrades.explosiveBlocks || 0,
+                  cashBoosters: data.upgrades.cashBoosters || 0
               };
 
               // Apply Gravity Upgrade to all balls (this runs before balls are loaded)
@@ -297,8 +315,14 @@ class GameEngine {
           // Load bit booster timer (with backwards compatibility)
           this.bitBoosterTimer = data.bitBoosterTimer || 0;
 
+          // Load cash booster timer (with backwards compatibility)
+          this.cashBoosterTimer = data.cashBoosterTimer || 0;
+
           // Load prestige count (with backwards compatibility)
           this.prestigeCount = data.prestigeCount || 0;
+
+          // Load last active time (with backwards compatibility)
+          this.lastActiveTime = data.lastActiveTime || Date.now();
 
           // Sync SoundManager
           SoundManager.volume = this.settings.volume;
@@ -381,6 +405,118 @@ class GameEngine {
       }
   }
 
+  onTabHidden() {
+      // Only track time if actively playing (not paused, not in menu)
+      if (this.gameState === 'PLAYING') {
+          this.lastActiveTime = Date.now();
+          console.log('[Offline Progress] Tab hidden at:', new Date(this.lastActiveTime).toLocaleTimeString(), 'GameState:', this.gameState);
+          this.saveGame();
+      } else {
+          console.log('[Offline Progress] Tab hidden but game not playing - no offline progress will be tracked. GameState:', this.gameState);
+      }
+  }
+
+  onTabVisible() {
+      // Calculate elapsed time and simulate offline progress
+      const now = Date.now();
+      const elapsed = now - this.lastActiveTime;
+
+      console.log('[Offline Progress] Tab visible at:', new Date(now).toLocaleTimeString());
+      console.log('[Offline Progress] Elapsed time:', (elapsed / 1000).toFixed(1), 'seconds');
+      console.log('[Offline Progress] GameState:', this.gameState);
+
+      // Only simulate if game is actively playing (not paused, not menu) and enough time has passed
+      if (this.gameState === 'PLAYING' && elapsed > 1000) {
+          this.simulateOfflineProgress(elapsed);
+      } else {
+          console.log('[Offline Progress] Skipped - GameState:', this.gameState, 'Elapsed:', elapsed);
+      }
+
+      // Update lastActiveTime
+      this.lastActiveTime = now;
+  }
+
+  simulateOfflineProgress(elapsedMs: number) {
+      console.log('[Offline Progress] Simulating progress for', elapsedMs, 'ms');
+
+      // Cap offline progress to 24 hours to prevent abuse
+      const MAX_OFFLINE_TIME = 24 * 60 * 60 * 1000; // 24 hours
+      const cappedElapsed = Math.min(elapsedMs, MAX_OFFLINE_TIME);
+      const elapsedSeconds = cappedElapsed / 1000;
+
+      // Calculate average depth based on deepest ball
+      const radius = this.rowHeight / 1.5;
+      const groundY = this.getGroundY();
+      const startY = groundY + radius + 20;
+      const deepestBall = this.balls.reduce((deepest, ball) => ball.y > deepest.y ? ball : deepest, this.balls[0]);
+      const currentRow = Math.max(0, Math.floor((deepestBall.y - startY) / this.rowHeight * 2));
+
+      console.log('[Offline Progress] Current depth:', currentRow, 'rows');
+
+      // Calculate average block stats at current depth
+      const avgBlockHp = 1 + Math.floor(currentRow * 0.2);
+      const avgBlockValue = 10 + Math.floor(currentRow * 0.5);
+
+      // Calculate damage per second
+      // Assume each ball hits ~2 blocks per second on average (rough estimate)
+      const hitsPerSecond = 2;
+      const totalDamage = this.balls.length * this.balls[0].damage * hitsPerSecond;
+
+      // Calculate blocks destroyed per second
+      const blocksPerSecond = totalDamage / avgBlockHp;
+
+      // Calculate money earned per second (with efficiency multiplier)
+      const efficiencyMult = 1 + (this.upgrades.efficiency - 1) * 0.2;
+      const moneyPerSecond = blocksPerSecond * avgBlockValue * efficiencyMult;
+
+      console.log('[Offline Progress] Money per second:', moneyPerSecond.toFixed(2));
+
+      // Calculate total offline earnings
+      const offlineEarnings = Math.floor(moneyPerSecond * elapsedSeconds);
+
+      console.log('[Offline Progress] Total earnings:', offlineEarnings);
+
+      // Add earnings to money (only if positive)
+      if (offlineEarnings > 0) {
+          this.money += offlineEarnings;
+
+          // Show notification about offline progress
+          const timeAway = this.formatTime(cappedElapsed);
+          this.showNotification(`Welcome back! Earned $${offlineEarnings} while away (${timeAway})`);
+
+          console.log('[Offline Progress] Notification shown:', `Earned $${offlineEarnings} (${timeAway})`);
+
+          // Save the updated state
+          this.saveGame();
+      } else {
+          console.log('[Offline Progress] No earnings (0 or negative)');
+      }
+
+      // Decay bit booster timer
+      if (this.bitBoosterTimer > 0) {
+          this.bitBoosterTimer = Math.max(0, this.bitBoosterTimer - cappedElapsed);
+      }
+
+      // Decay cash booster timer
+      if (this.cashBoosterTimer > 0) {
+          this.cashBoosterTimer = Math.max(0, this.cashBoosterTimer - cappedElapsed);
+      }
+  }
+
+  formatTime(ms: number): string {
+      const seconds = Math.floor(ms / 1000);
+      const minutes = Math.floor(seconds / 60);
+      const hours = Math.floor(minutes / 60);
+
+      if (hours > 0) {
+          return `${hours}h ${minutes % 60}m`;
+      } else if (minutes > 0) {
+          return `${minutes}m ${seconds % 60}s`;
+      } else {
+          return `${seconds}s`;
+      }
+  }
+
   prestige() {
       // Increment prestige count (adds one more ball)
       this.prestigeCount++;
@@ -394,11 +530,15 @@ class GameEngine {
           gravity: 1,
           efficiency: 1,
           bitBoosters: 0,
-          explosiveBlocks: 0
+          explosiveBlocks: 0,
+          cashBoosters: 0
       };
 
       // Reset bit booster timer
       this.bitBoosterTimer = 0;
+
+      // Reset cash booster timer
+      this.cashBoosterTimer = 0;
 
       // Clear all blocks
       this.blocks = [];
@@ -587,15 +727,18 @@ class GameEngine {
 
             // Determine block type based on upgrade levels
             // Only roll for special types if block is within the playable hole area
-            let blockType: 'normal' | 'bitBooster' | 'explosive' = 'normal';
+            let blockType: 'normal' | 'bitBooster' | 'explosive' | 'cashBooster' = 'normal';
             if (finalX >= this.holeLeft && finalX <= this.holeRight) {
                 const bitBoosterChance = this.upgrades.bitBoosters * 0.01; // 1% per level
                 const explosiveChance = this.upgrades.explosiveBlocks * 0.01; // 1% per level
+                const cashBoosterChance = this.upgrades.cashBoosters * 0.01; // 1% per level
                 const roll = Math.random();
                 if (roll < bitBoosterChance) {
                     blockType = 'bitBooster';
                 } else if (roll < bitBoosterChance + explosiveChance) {
                     blockType = 'explosive';
+                } else if (roll < bitBoosterChance + explosiveChance + cashBoosterChance) {
+                    blockType = 'cashBooster';
                 }
             }
 
@@ -617,9 +760,47 @@ class GameEngine {
     this.maxRowGenerated = startRow + count;
   }
 
-  destroyAdjacentBlocks(centerBlock: Block) {
+  rerollExistingBlocks() {
+      // Re-roll all existing blocks in the playable area for special types
+      const bitBoosterChance = this.upgrades.bitBoosters * 0.01;
+      const explosiveChance = this.upgrades.explosiveBlocks * 0.01;
+      const cashBoosterChance = this.upgrades.cashBoosters * 0.01;
+
+      if (bitBoosterChance === 0 && explosiveChance === 0 && cashBoosterChance === 0) return;
+
+      for (const block of this.blocks) {
+          // Only re-roll blocks within the playable hole area
+          if (block.x < this.holeLeft || block.x > this.holeRight) continue;
+
+          // Reset the roll flag and re-roll the block
+          block.typeRolled = false;
+          const roll = Math.random();
+
+          if (roll < bitBoosterChance) {
+              block.type = 'bitBooster';
+          } else if (roll < bitBoosterChance + explosiveChance) {
+              block.type = 'explosive';
+          } else if (roll < bitBoosterChance + explosiveChance + cashBoosterChance) {
+              block.type = 'cashBooster';
+          } else {
+              // Reset to normal if it doesn't roll as special
+              block.type = 'normal';
+          }
+          // Keep the original color based on depth
+
+          block.typeRolled = true;
+      }
+  }
+
+  destroyAdjacentBlocks(centerBlock: Block, processedBlocks: Set<string> = new Set()) {
     const { row, col } = centerBlock;
     const efficiencyMult = 1 + (this.upgrades.efficiency - 1) * 0.2;
+    const cashMultiplier = this.cashBoosterTimer > 0 ? 2 : 1;
+
+    // Create unique ID for this block to prevent infinite recursion
+    const blockId = `${row},${col}`;
+    if (processedBlocks.has(blockId)) return;
+    processedBlocks.add(blockId);
 
     // Hexagonal neighbors depend on whether row is even or odd
     // For flat-topped hexagons with offset coordinates:
@@ -644,9 +825,26 @@ class GameEngine {
         const idx = this.blocks.findIndex(b => b.row === targetRow && b.col === targetCol);
         if (idx !== -1) {
             const adjacentBlock = this.blocks[idx];
-            this.money += Math.ceil(adjacentBlock.value * efficiencyMult);
+            const blockType = adjacentBlock.type;
+
+            // Give money for destroying this block
+            this.money += Math.ceil(adjacentBlock.value * efficiencyMult * cashMultiplier);
+
+            // Remove the block from the array
             this.blocks.splice(idx, 1);
             SoundManager.playPop();
+
+            // Trigger special block effects AFTER destroying
+            if (blockType === 'bitBooster') {
+                // Refresh bit booster timer
+                this.bitBoosterTimer = this.BIT_BOOSTER_DURATION;
+            } else if (blockType === 'cashBooster') {
+                // Refresh cash booster timer
+                this.cashBoosterTimer = this.CASH_BOOSTER_DURATION;
+            } else if (blockType === 'explosive') {
+                // Chain explosion - destroy this block's neighbors too
+                this.destroyAdjacentBlocks(adjacentBlock, processedBlocks);
+            }
         }
     }
   }
@@ -669,11 +867,18 @@ class GameEngine {
             if (this.bitBoosterTimer < 0) this.bitBoosterTimer = 0;
         }
 
+        // Update Cash Booster timer
+        if (this.cashBoosterTimer > 0) {
+            this.cashBoosterTimer -= dt;
+            if (this.cashBoosterTimer < 0) this.cashBoosterTimer = 0;
+        }
+
         // Roll existing blocks for special types when they come near any ball
         const bitBoosterChance = this.upgrades.bitBoosters * 0.01;
         const explosiveChance = this.upgrades.explosiveBlocks * 0.01;
+        const cashBoosterChance = this.upgrades.cashBoosters * 0.01;
 
-        if (bitBoosterChance > 0 || explosiveChance > 0) {
+        if (bitBoosterChance > 0 || explosiveChance > 0 || cashBoosterChance > 0) {
             // Only roll blocks within ~2 screens of any ball
             const rollDistance = this.canvasHeight * 2;
 
@@ -696,6 +901,8 @@ class GameEngine {
                     block.type = 'bitBooster';
                 } else if (roll < bitBoosterChance + explosiveChance) {
                     block.type = 'explosive';
+                } else if (roll < bitBoosterChance + explosiveChance + cashBoosterChance) {
+                    block.type = 'cashBooster';
                 }
             }
         }
@@ -763,13 +970,17 @@ class GameEngine {
           if (destroyed) {
             this.blocks.splice(i, 1);
             const efficiencyMult = 1 + (this.upgrades.efficiency - 1) * 0.2;
-            this.money += Math.ceil(block.value * efficiencyMult);
+            const cashMultiplier = this.cashBoosterTimer > 0 ? 2 : 1;
+            this.money += Math.ceil(block.value * efficiencyMult * cashMultiplier);
             SoundManager.playPop();
 
             // Handle special block effects
             if (block.type === 'bitBooster') {
               // Refresh timer (no stacking, just reset)
               this.bitBoosterTimer = this.BIT_BOOSTER_DURATION;
+            } else if (block.type === 'cashBooster') {
+              // Refresh cash booster timer
+              this.cashBoosterTimer = this.CASH_BOOSTER_DURATION;
             } else if (block.type === 'explosive') {
               // Destroy adjacent blocks
               this.destroyAdjacentBlocks(block);
@@ -951,16 +1162,87 @@ class GameEngine {
             context.textBaseline = 'alphabetic';
         }
 
-        // Draw Notification
+        // Draw Cash Booster Timer Bar (Top Center, below bit booster)
+        if (this.cashBoosterTimer > 0) {
+            const barWidth = 200 * scale;
+            const barHeight = 24 * scale;
+            const barX = (this.canvasWidth - barWidth) / 2;
+            const barGap = 5 * scale;
+            const barY = hudMargin + (this.bitBoosterTimer > 0 ? barHeight + barGap : 0);
+            const fillRatio = this.cashBoosterTimer / this.CASH_BOOSTER_DURATION;
+
+            // Background
+            context.fillStyle = 'rgba(50, 50, 50, 0.8)';
+            context.beginPath();
+            context.roundRect(barX, barY, barWidth, barHeight, 5 * scale);
+            context.fill();
+
+            // Fill (green gradient for cash boost effect)
+            const gradient = context.createLinearGradient(barX, barY, barX + barWidth * fillRatio, barY);
+            gradient.addColorStop(0, '#00AA00');
+            gradient.addColorStop(1, '#00FF00');
+            context.fillStyle = gradient;
+            context.beginPath();
+            context.roundRect(barX, barY, barWidth * fillRatio, barHeight, 5 * scale);
+            context.fill();
+
+            // Border
+            context.strokeStyle = '#00CC00';
+            context.lineWidth = 2 * scale;
+            context.beginPath();
+            context.roundRect(barX, barY, barWidth, barHeight, 5 * scale);
+            context.stroke();
+
+            // "2x MONEY" text
+            context.fillStyle = 'white';
+            context.font = `${12 * scale}px "Fredoka One", cursive`;
+            context.textAlign = 'center';
+            context.textBaseline = 'middle';
+            context.fillText('2x MONEY', barX + barWidth / 2, barY + barHeight / 2);
+            context.textBaseline = 'alphabetic';
+        }
+
+        // Draw Notification (Top-Center, below HUD)
         if (this.notificationTimer > 0) {
             context.save();
             const alpha = Math.min(1, this.notificationTimer / 500); // Fade out in last 500ms
             context.globalAlpha = alpha;
 
+            // Position below the pause button and HUD
+            const notifY = hudMargin + (80 * scale) + (30 * scale); // Below HUD with 30px gap
+
+            // Background box for better readability
+            context.font = `${22 * scale}px "Fredoka One", cursive`;
+            context.textAlign = 'center';
+            context.textBaseline = 'middle';
+
+            // Measure text width for background
+            const textMetrics = context.measureText(this.notificationText);
+            const textWidth = textMetrics.width;
+            const padding = 20 * scale;
+            const boxWidth = textWidth + padding * 2;
+            const boxHeight = 40 * scale;
+            const boxX = (this.canvasWidth - boxWidth) / 2;
+            const boxY = notifY - boxHeight / 2;
+
+            // Draw background with shadow
+            context.shadowColor = 'rgba(0, 0, 0, 0.5)';
+            context.shadowBlur = 10 * scale;
+            context.shadowOffsetY = 3 * scale;
+
+            context.fillStyle = 'rgba(76, 175, 80, 0.95)'; // Green background
+            context.beginPath();
+            context.roundRect(boxX, boxY, boxWidth, boxHeight, 8 * scale);
+            context.fill();
+
+            // Reset shadow for text
+            context.shadowColor = 'rgba(0, 0, 0, 0.8)';
+            context.shadowBlur = 4 * scale;
+            context.shadowOffsetY = 2 * scale;
+
+            // Draw text
             context.fillStyle = 'white';
-            context.font = `${20 * scale}px "Fredoka One", cursive`;
-            context.textAlign = 'left';
-            context.fillText(this.notificationText, saveBtnX + saveBtnSize + (15 * scale), saveBtnY + saveBtnSize / 2 + (7 * scale));
+            context.fillText(this.notificationText, this.canvasWidth / 2, notifY);
 
             context.restore();
         }
@@ -1034,11 +1316,15 @@ class GameEngine {
     context.save();
     context.translate(0, parallaxAdjustment); // Apply parallax offset
 
+    // Start drawing well above the visible area to prevent gaps at the top
+    // The parallax offset can move this up, so we need extra coverage
+    const holeBackgroundStartY = groundY - 2000;
+
     context.fillStyle = this.dirtPattern || '#4A2C2A'; // Use pattern, fallback to solid dark brown
-    context.fillRect(this.holeLeft, groundY, this.holeWidth, 1000000);
+    context.fillRect(this.holeLeft, holeBackgroundStartY, this.holeWidth, 1002000);
     // Overlay a semi-transparent dark color to make it darker than the walls
     context.fillStyle = 'rgba(0, 0, 0, 0.3)'; // Adjust alpha for desired darkness
-    context.fillRect(this.holeLeft, groundY, this.holeWidth, 1000000);
+    context.fillRect(this.holeLeft, holeBackgroundStartY, this.holeWidth, 1002000);
 
     context.restore(); // Remove parallax offset
 
@@ -1320,7 +1606,7 @@ class GameEngine {
           // Extra space for SHOP button (btnHeight + gap)
           boxH = margin + titleLineHeight + gap + (btnHeight * 4) + (gap * 3) + (30 * scale) + margin;
       } else if (this.menuState === 'SHOP') {
-          // Shop Height: Title + 2 section headers + 5 items + back button
+          // Shop Height: Title + 2 section headers + 6 items + back button
           const sectionHeaderH = 30 * scale;
           const itemHeight = 75 * scale;
           const gapSmall = 15 * scale;
@@ -1328,7 +1614,7 @@ class GameEngine {
                + sectionHeaderH + gapSmall       // "General Upgrades" header
                + (itemHeight + gapSmall) * 3     // 3 general items
                + sectionHeaderH + gapSmall       // "Block Upgrades" header
-               + (itemHeight + gapSmall) * 2     // 2 block items
+               + (itemHeight + gapSmall) * 3     // 3 block items (Bit Boosters, Cash Boosters, Explosive Blocks)
                + btnHeight + margin;             // Back button
       } else {
           // Settings Height: Title + Volume + 3 Toggles + Back + Spacing
@@ -1437,23 +1723,47 @@ class GameEngine {
     // Notification Text
     if (this.notificationTimer > 0) {
         context.save();
-        const alpha = Math.min(1, this.notificationTimer / 500); 
+        const alpha = Math.min(1, this.notificationTimer / 500);
         context.globalAlpha = alpha;
-        
-        context.fillStyle = '#4caf50'; 
-        context.font = `${20 * scale}px "Fredoka One", cursive`;
-        context.textAlign = 'center';
-        context.textBaseline = 'middle';
-        
+
         // Positioned below the Save button (centered in the remaining space)
-        // remaining space starts at saveBtnY + btnHeight
-        // box ends at boxY + boxH
         const bottomSpaceStart = saveBtnY + btnHeight;
         const bottomSpaceEnd = boxY + boxH;
         const notifY = (bottomSpaceStart + bottomSpaceEnd) / 2;
 
+        // Background box for better readability
+        context.font = `${22 * scale}px "Fredoka One", cursive`;
+        context.textAlign = 'center';
+        context.textBaseline = 'middle';
+
+        // Measure text width for background
+        const textMetrics = context.measureText(this.notificationText);
+        const textWidth = textMetrics.width;
+        const padding = 20 * scale;
+        const notifBoxWidth = Math.min(textWidth + padding * 2, btnW); // Cap at button width
+        const notifBoxHeight = 40 * scale;
+        const notifBoxX = (this.canvasWidth - notifBoxWidth) / 2;
+        const notifBoxY = notifY - notifBoxHeight / 2;
+
+        // Draw background with shadow
+        context.shadowColor = 'rgba(0, 0, 0, 0.5)';
+        context.shadowBlur = 10 * scale;
+        context.shadowOffsetY = 3 * scale;
+
+        context.fillStyle = 'rgba(76, 175, 80, 0.95)'; // Green background
+        context.beginPath();
+        context.roundRect(notifBoxX, notifBoxY, notifBoxWidth, notifBoxHeight, 8 * scale);
+        context.fill();
+
+        // Reset shadow for text
+        context.shadowColor = 'rgba(0, 0, 0, 0.8)';
+        context.shadowBlur = 4 * scale;
+        context.shadowOffsetY = 2 * scale;
+
+        // Draw text
+        context.fillStyle = 'white';
         context.fillText(this.notificationText, this.canvasWidth / 2, notifY);
-        
+
         context.restore();
     }
     
@@ -1596,18 +1906,19 @@ class GameEngine {
           efficiency: Math.floor(200 * Math.pow(1.6, this.upgrades.efficiency - 1)),
           // Block Upgrades (max level 10)
           bitBoosters: this.upgrades.bitBoosters >= 10 ? Infinity : Math.floor(150 * Math.pow(1.5, this.upgrades.bitBoosters)),
-          explosiveBlocks: this.upgrades.explosiveBlocks >= 10 ? Infinity : Math.floor(150 * Math.pow(1.5, this.upgrades.explosiveBlocks))
+          explosiveBlocks: this.upgrades.explosiveBlocks >= 10 ? Infinity : Math.floor(150 * Math.pow(1.5, this.upgrades.explosiveBlocks)),
+          cashBoosters: this.upgrades.cashBoosters >= 10 ? Infinity : Math.floor(150 * Math.pow(1.5, this.upgrades.cashBoosters))
       };
   }
 
-  buyUpgrade(type: 'damage' | 'gravity' | 'efficiency' | 'bitBoosters' | 'explosiveBlocks') {
+  buyUpgrade(type: 'damage' | 'gravity' | 'efficiency' | 'bitBoosters' | 'explosiveBlocks' | 'cashBoosters'): boolean {
       const prices = this.getShopPrices();
       const cost = prices[type];
 
       // Check max level for block upgrades
-      if ((type === 'bitBoosters' || type === 'explosiveBlocks') && this.upgrades[type] >= 10) {
+      if ((type === 'bitBoosters' || type === 'explosiveBlocks' || type === 'cashBoosters') && this.upgrades[type] >= 10) {
           this.showNotification("Max level reached!");
-          return;
+          return false;
       }
 
       if (this.money >= cost) {
@@ -1625,13 +1936,27 @@ class GameEngine {
               for (const ball of this.balls) {
                   ball.gravity = radius * 0.02 * gravityMult;
               }
+          } else if (type === 'bitBoosters' || type === 'explosiveBlocks' || type === 'cashBoosters') {
+              // Re-roll existing blocks to apply new upgrade immediately
+              this.rerollExistingBlocks();
           }
-          // bitBoosters and explosiveBlocks take effect in generateRows()
 
-          this.showNotification(`Upgraded ${type}!`);
+          // Map upgrade type to display name
+          const upgradeNames: Record<typeof type, string> = {
+              damage: 'Drill Bit',
+              gravity: 'Engine',
+              efficiency: 'Scanner',
+              bitBoosters: 'Bit Boosters',
+              explosiveBlocks: 'Explosive Blocks',
+              cashBoosters: 'Cash Boosters'
+          };
+
+          this.showNotification(`Upgraded ${upgradeNames[type]}!`);
           this.saveGame(); // Auto-save on purchase
+          return true;
       } else {
           this.showNotification("Not enough money!");
+          return false;
       }
   }
 
@@ -1736,7 +2061,7 @@ class GameEngine {
     };
 
     // --- Helper: Draw Block Upgrade Item ---
-    const drawBlockItem = (name: string, type: 'bitBoosters' | 'explosiveBlocks', description: string, glowColor: string) => {
+    const drawBlockItem = (name: string, type: 'bitBoosters' | 'explosiveBlocks' | 'cashBoosters', description: string, glowColor: string) => {
         const btnId = `buy_${type}`;
         const offset = (this.activeButton === btnId) ? 2 * scale : 0;
         const y = currentY + offset;
@@ -1807,6 +2132,7 @@ class GameEngine {
     // === BLOCK UPGRADES SECTION ===
     drawSectionHeader('BLOCK UPGRADES');
     drawBlockItem("Bit Boosters", 'bitBoosters', '2x damage for 5s', '#FFA500');
+    drawBlockItem("Cash Boosters", 'cashBoosters', '2x money for 5s', '#00CC00');
     drawBlockItem("Explosive Blocks", 'explosiveBlocks', 'Destroy neighbors', '#FF4444');
 
     // Back Button (Bottom)
@@ -1836,16 +2162,42 @@ class GameEngine {
         const alpha = Math.min(1, this.notificationTimer / 500);
         context.globalAlpha = alpha;
 
-        context.fillStyle = '#4caf50';
-        context.font = `${20 * scale}px "Fredoka One", cursive`;
-        context.textAlign = 'center';
-        context.textBaseline = 'middle';
-
         // Positioned below the Back button
         const bottomSpaceStart = backBtnY + btnHeight;
         const bottomSpaceEnd = boxY + boxH;
         const notifY = (bottomSpaceStart + bottomSpaceEnd) / 2;
 
+        // Background box for better readability
+        context.font = `${22 * scale}px "Fredoka One", cursive`;
+        context.textAlign = 'center';
+        context.textBaseline = 'middle';
+
+        // Measure text width for background
+        const textMetrics = context.measureText(this.notificationText);
+        const textWidth = textMetrics.width;
+        const padding = 20 * scale;
+        const notifBoxWidth = Math.min(textWidth + padding * 2, btnW); // Cap at button width
+        const notifBoxHeight = 40 * scale;
+        const notifBoxX = (this.canvasWidth - notifBoxWidth) / 2;
+        const notifBoxY = notifY - notifBoxHeight / 2;
+
+        // Draw background with shadow
+        context.shadowColor = 'rgba(0, 0, 0, 0.5)';
+        context.shadowBlur = 10 * scale;
+        context.shadowOffsetY = 3 * scale;
+
+        context.fillStyle = 'rgba(76, 175, 80, 0.95)'; // Green background
+        context.beginPath();
+        context.roundRect(notifBoxX, notifBoxY, notifBoxWidth, notifBoxHeight, 8 * scale);
+        context.fill();
+
+        // Reset shadow for text
+        context.shadowColor = 'rgba(0, 0, 0, 0.8)';
+        context.shadowBlur = 4 * scale;
+        context.shadowOffsetY = 2 * scale;
+
+        // Draw text
+        context.fillStyle = 'white';
         context.fillText(this.notificationText, this.canvasWidth / 2, notifY);
 
         context.restore();
@@ -1858,6 +2210,9 @@ class GameEngine {
       if (this.gameState === 'PLAYING') {
           this.gameState = 'PAUSED';
           this.menuState = 'MAIN'; // Always open to main menu
+          // Clear any in-game notifications (like offline progress) when pausing
+          this.notificationTimer = 0;
+          this.notificationText = "";
       } else if (this.gameState === 'PAUSED') {
           this.gameState = 'PLAYING';
           this.activeButton = null; // Reset mouse state on resume
@@ -1968,7 +2323,7 @@ class GameEngine {
                 if (type === 'mousedown') {
                     this.activeButton = 'save';
                 } else if (type === 'mouseup' && this.activeButton === 'save') {
-                    this.saveGame();
+                    this.saveGame(true); // Show notification for manual save
                     this.activeButton = null;
                 }
             }
@@ -2040,6 +2395,9 @@ class GameEngine {
                  if (type === 'mousedown') {
                      this.activeButton = 'back';
                  } else if (type === 'mouseup' && this.activeButton === 'back') {
+                     // Clear any notifications when leaving settings
+                     this.notificationTimer = 0;
+                     this.notificationText = "";
                      this.menuState = 'MAIN';
                      this.activeButton = null;
                  }
@@ -2066,6 +2424,8 @@ class GameEngine {
             currentY += sectionHeaderH + gapSmall; // Skip header
             const bitBoostersY = currentY;
             currentY += itemHeight + gapSmall;
+            const cashBoostersY = currentY;
+            currentY += itemHeight + gapSmall;
             const explosiveBlocksY = currentY;
 
             // Back Button (Checked first to ensure it works)
@@ -2077,6 +2437,10 @@ class GameEngine {
                     this.activeButton = 'back';
                 } else if (type === 'mouseup') {
                     if (this.activeButton === 'back') {
+                        // Clear any purchase notifications when leaving shop
+                        this.notificationTimer = 0;
+                        this.notificationText = "";
+
                         if (this.shopOpenedFromHUD) {
                             // Resume game directly if shop was opened from HUD
                             this.gameState = 'PLAYING';
@@ -2095,11 +2459,12 @@ class GameEngine {
             }
 
             // Check each shop item
-            const items: Array<{type: 'damage' | 'gravity' | 'efficiency' | 'bitBoosters' | 'explosiveBlocks', y: number}> = [
+            const items: Array<{type: 'damage' | 'gravity' | 'efficiency' | 'bitBoosters' | 'explosiveBlocks' | 'cashBoosters', y: number}> = [
                 { type: 'damage', y: damageY },
                 { type: 'gravity', y: gravityY },
                 { type: 'efficiency', y: efficiencyY },
                 { type: 'bitBoosters', y: bitBoostersY },
+                { type: 'cashBoosters', y: cashBoostersY },
                 { type: 'explosiveBlocks', y: explosiveBlocksY }
             ];
 
@@ -2111,16 +2476,18 @@ class GameEngine {
                     const canAfford = this.money >= cost;
 
                     // Check for max level on block upgrades
-                    const isMaxed = (item.type === 'bitBoosters' || item.type === 'explosiveBlocks') && this.upgrades[item.type] >= 10;
+                    const isMaxed = (item.type === 'bitBoosters' || item.type === 'explosiveBlocks' || item.type === 'cashBoosters') && this.upgrades[item.type] >= 10;
 
                     if (type === 'mousemove') this.isHoveringButton = true;
                     // Only set active button if player can afford it and it's not maxed
                     if (type === 'mousedown' && canAfford && !isMaxed) this.activeButton = btnId;
                     if (type === 'mouseup') {
                         try {
-                            this.buyUpgrade(item.type);
+                            const success = this.buyUpgrade(item.type);
                             this.activeButton = null;
-                            SoundManager.playPop();
+                            if (success) {
+                                SoundManager.playPop();
+                            }
                         } catch (e) {
                             console.error(e);
                             this.showNotification("Error Buying!");
@@ -2188,7 +2555,7 @@ class GameEngine {
             if (type === 'mousedown') {
                 this.activeButton = 'save_icon';
             } else if (type === 'mouseup' && this.activeButton === 'save_icon') {
-                this.saveGame();
+                this.saveGame(true); // Show notification for manual save
                 this.activeButton = null;
             }
             return;

@@ -64,8 +64,19 @@ const GameCanvas: React.FC = () => {
         }
     };
 
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        // Tab is being hidden - save timestamp
+        engine.onTabHidden();
+      } else {
+        // Tab is visible again - calculate offline progress
+        engine.onTabVisible();
+      }
+    };
+
     window.addEventListener('resize', handleResize);
     window.addEventListener('keydown', onKeyDown);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
     canvas.addEventListener('mousedown', onMouseDown);
     canvas.addEventListener('mouseup', onMouseUp);
     canvas.addEventListener('mousemove', onMouseMove);
@@ -98,6 +109,7 @@ const GameCanvas: React.FC = () => {
       cancelAnimationFrame(animationFrameId);
       window.removeEventListener('resize', handleResize);
       window.removeEventListener('keydown', onKeyDown);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
       canvas.removeEventListener('mousedown', onMouseDown);
       canvas.removeEventListener('mouseup', onMouseUp);
       canvas.removeEventListener('mousemove', onMouseMove);
