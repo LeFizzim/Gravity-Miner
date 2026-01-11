@@ -34,6 +34,7 @@ npm run preview      # Preview production build locally
 - **Input handling:** For lists (Shop), use math-based index calculation over individual hitbox checks
 - **Block Upgrades:** Special block types are rolled via `typeRolled` flag when blocks come near the player; only blocks within the hole area (`holeLeft` to `holeRight`) are eligible
 - **Shop Menu Spacing:** When adding/removing shop items, ALWAYS update the `boxH` calculation in `getPauseMenuLayout()` to prevent overlapping with the back button. The formula counts section headers, items, and spacing.
+- **Documentation:** When adding new features, mechanics, or systems, ALWAYS check if `README.md` needs updating to reflect the changes. Update gameplay descriptions, features lists, and any affected sections.
 - **Safety:** Wrap state-heavy operations in try-catch; ensure all rendering variables are defined to avoid crashing the game loop
 - **Performance:** Game loop uses time-delta (`dt`) for frame-rate independent physics
 

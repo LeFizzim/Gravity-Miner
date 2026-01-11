@@ -10,6 +10,24 @@ The game operates on a simple but satisfying premise: a ball is dropped into a h
 *   **Progression**: Breaking blocks earns you money and clears the path deeper underground.
 *   **Infinite Depth**: The world is procedurally generated as you fall. There is no bottom, only deeper and tougher layers to uncover.
 *   **Idle Gameplay**: Once started, the ball does the work for you. Sit back and watch the mining happen.
+*   **Offline Progress**: Earn money even when the tab is minimized or unfocused. The game calculates your earnings based on your current depth and upgrades.
+
+## Core Features
+
+### Upgrades & Shop
+Spend your hard-earned money on powerful upgrades:
+*   **Drill Bit**: Increase damage dealt to blocks
+*   **Engine**: Speed up the ball's descent with increased gravity
+*   **Scanner**: Boost the value of blocks you destroy
+
+### Special Block Types
+Discover rare special blocks as you dig deeper:
+*   **Bit Boosters** (Orange glow): Activate a 5-second 2x damage multiplier
+*   **Cash Boosters** (Green glow): Activate a 5-second 2x money multiplier
+*   **Explosive Blocks** (Red glow): Destroy all neighboring blocks in a chain reaction
+
+### Prestige System
+Reach extreme depths (1000m+) to prestige and gain additional drilling balls, multiplying your destruction potential.
 
 ## Technology Stack
 
